@@ -2,7 +2,7 @@ import json
 from llm_client import llm_chat, llm_chat_stream
 from vector_store import search_articles
 from search_client import search as web_search
-from database import get_latest_snapshot, get_topics
+from database import get_latest_snapshot, get_topics, get_topic_global_overview
 
 SYSTEM_PROMPT = """You are an intelligent industry monitoring assistant.
 You help users understand industry trends, news, and events based on a curated knowledge base and live web searches.
@@ -20,6 +20,12 @@ Use this as background knowledge when answering questions about this domain.
 --- Domain Overview ---
 {overview}
 --- End Overview ---
+"""
+
+GLOBAL_OVERVIEW_PREAMBLE = """
+--- Macro Domain Analysis (Long-term Overview) ---
+{overview}
+--- End Macro Analysis ---
 """
 
 
@@ -48,11 +54,18 @@ def _build_topic_context(topic_id: int) -> str | None:
             e["entity"] for e in top_entities[:8]
         )
 
-    return SNAPSHOT_PREAMBLE.format(
+    result = SNAPSHOT_PREAMBLE.format(
         topic_name=topic_name,
         date=snapshot.get("generated_at", "unknown"),
         overview=snapshot["content"],
     ) + entities_str
+
+    # Append Global Overview (long-term macro analysis) if available
+    global_overview = get_topic_global_overview(topic_id)
+    if global_overview and global_overview.strip():
+        result += GLOBAL_OVERVIEW_PREAMBLE.format(overview=global_overview)
+
+    return result
 
 
 def _hybrid_search(query: str, topic_id: int | None, n_results: int = 8) -> tuple[list[dict], list[dict]]:
