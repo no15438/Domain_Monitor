@@ -74,10 +74,19 @@ def _hybrid_search(query: str, topic_id: int | None, n_results: int = 8) -> tupl
     return articles, snapshots
 
 
+def _extract_title_from_ctx(article_context: str) -> str:
+    """Extract the Title line from a formatted article_context string."""
+    for line in article_context.splitlines():
+        if line.startswith("Title:"):
+            return line[6:].strip()
+    return ""
+
+
 def chat_stream_with_status(
     message: str,
     article_context: str | None = None,
     topic_id: int | None = None,
+    history: list[dict] | None = None,
 ):
     """Yields status dicts and text chunks interleaved."""
     parts: list[str] = []
@@ -92,7 +101,14 @@ def chat_stream_with_status(
 
     yield {"status": "searching_knowledge_base"}
 
-    articles, snapshots = _hybrid_search(message, topic_id)
+    # Enrich vector search query with article title when available
+    search_query = message
+    if article_context:
+        title = _extract_title_from_ctx(article_context)
+        if title:
+            search_query = f"{title} {message}"
+
+    articles, snapshots = _hybrid_search(search_query, topic_id)
 
     if articles:
         parts.append("[Related articles from knowledge base]")
@@ -132,8 +148,15 @@ def chat_stream_with_status(
     yield {"status": "generating"}
 
     ctx = "\n\n".join(parts)
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Context:\n{ctx}\n\nQuestion: {message}"},
-    ]
+
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # Inject prior conversation turns (max 20 messages to avoid token overflow)
+    if history:
+        # Only keep roles the LLM understands; strip any empty assistant placeholders
+        valid_history = [
+            h for h in history[-20:]
+            if h.get("role") in ("user", "assistant") and h.get("content", "").strip()
+        ]
+        messages.extend(valid_history)
+    messages.append({"role": "user", "content": f"Context:\n{ctx}\n\nQuestion: {message}"})
     yield from llm_chat_stream(messages, temperature=0.5)

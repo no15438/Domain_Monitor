@@ -329,11 +329,17 @@ export type ChatEvent =
   | { type: "status"; value: string }
   | { type: "content"; value: string };
 
+export interface ChatHistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export async function* streamChat(
   message: string,
   articleContext?: string,
   topicId?: number | null,
   signal?: AbortSignal,
+  history?: ChatHistoryMessage[],
 ): AsyncGenerator<ChatEvent> {
   const res = await fetch(`${BASE}/api/chat`, {
     method: "POST",
@@ -342,6 +348,7 @@ export async function* streamChat(
       message,
       article_context: articleContext,
       topic_id: topicId ?? null,
+      history: history ?? [],
     }),
     signal,
   });

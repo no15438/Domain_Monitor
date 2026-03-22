@@ -153,7 +153,7 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
   const [openSections, setOpenSections] = useState<Set<SectionKey>>(
     new Set(["keywords", "angles"]),
   );
-  const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => {
     setBrief(topic.research_brief ?? "");

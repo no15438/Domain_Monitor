@@ -594,16 +594,23 @@ async def api_global_overview_status(topic_id: int):
 # ── Chatbot (streaming) ──────────────────────────────
 
 
+class ChatHistoryMessage(BaseModel):
+    role: str
+    content: str
+
+
 class ChatReq(BaseModel):
     message: str
     article_context: str | None = None
     topic_id: int | None = None
+    history: list[ChatHistoryMessage] = []
 
 
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatReq):
     def generate():
-        for item in chat_stream_with_status(req.message, req.article_context, req.topic_id):
+        history_dicts = [{"role": m.role, "content": m.content} for m in req.history]
+        for item in chat_stream_with_status(req.message, req.article_context, req.topic_id, history_dicts):
             if isinstance(item, dict):
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
             else:

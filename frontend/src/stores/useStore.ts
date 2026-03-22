@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { Article, Keyword, Topic } from "@/lib/api";
 import {
   fetchGlobalOverview,
@@ -68,7 +69,8 @@ interface AppState {
   activeTopicId: number | null;
   articles: Article[];
   keywords: Keyword[];
-  chatMessages: ChatMessage[];
+  /** Per-topic chat history keyed by String(topicId). Persisted to localStorage. */
+  chatMessagesByTopic: Record<string, ChatMessage[]>;
   selectedArticle: Article | null;
   fetchingTopicId: number | null;
   isChatLoading: boolean;
@@ -104,12 +106,14 @@ interface AppState {
   hydrateFetchStatus: (topicId: number | null) => Promise<void>;
 }
 
-export const useStore = create<AppState>((set, get) => ({
+export const useStore = create<AppState>()(
+  persist(
+    (set, get) => ({
   topics: [],
   activeTopicId: null,
   articles: [],
   keywords: [],
-  chatMessages: [],
+  chatMessagesByTopic: {},
   selectedArticle: null,
   fetchingTopicId: null,
   isChatLoading: false,
@@ -403,15 +407,33 @@ export const useStore = create<AppState>((set, get) => ({
   setHighlightedEventId: (id) => set({ highlightedEventId: id }),
   refreshInsights: () => set((s) => ({ insightRefreshKey: s.insightRefreshKey + 1 })),
   addChatMessage: (msg) =>
-    set((s) => ({ chatMessages: [...s.chatMessages, msg] })),
+    set((s) => {
+      const key = String(s.activeTopicId ?? "null");
+      const prev = s.chatMessagesByTopic[key] ?? [];
+      return { chatMessagesByTopic: { ...s.chatMessagesByTopic, [key]: [...prev, msg] } };
+    }),
   appendToLastAssistant: (chunk) =>
     set((s) => {
-      const msgs = [...s.chatMessages];
+      const key = String(s.activeTopicId ?? "null");
+      const msgs = [...(s.chatMessagesByTopic[key] ?? [])];
       const last = msgs[msgs.length - 1];
       if (last && last.role === "assistant") {
         msgs[msgs.length - 1] = { ...last, content: last.content + chunk };
       }
-      return { chatMessages: msgs };
+      return { chatMessagesByTopic: { ...s.chatMessagesByTopic, [key]: msgs } };
     }),
-  clearChat: () => set({ chatMessages: [], selectedArticle: null }),
-}));
+  clearChat: () =>
+    set((s) => {
+      const key = String(s.activeTopicId ?? "null");
+      return {
+        chatMessagesByTopic: { ...s.chatMessagesByTopic, [key]: [] },
+        selectedArticle: null,
+      };
+    }),
+    }),
+    {
+      name: "domain-monitor-chat",
+      partialize: (state) => ({ chatMessagesByTopic: state.chatMessagesByTopic }),
+    }
+  )
+);

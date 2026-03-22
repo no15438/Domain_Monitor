@@ -9,7 +9,7 @@ import { streamChat } from "@/lib/api";
 
 export default function ChatBot() {
   const {
-    chatMessages,
+    chatMessagesByTopic,
     addChatMessage,
     appendToLastAssistant,
     clearChat,
@@ -21,6 +21,8 @@ export default function ChatBot() {
     setChatOpen,
     activeTopicId,
   } = useStore();
+
+  const chatMessages = chatMessagesByTopic[String(activeTopicId ?? "null")] ?? [];
 
   const [input, setInput] = useState("");
   const [chatStatus, setChatStatus] = useState<string | null>(null);
@@ -47,8 +49,24 @@ export default function ChatBot() {
     if (!msg || isChatLoading) return;
 
     const ctx = selectedArticle
-      ? `Title: ${selectedArticle.title}\nSummary: ${selectedArticle.summary}\nContent: ${selectedArticle.content?.slice(0, 1000)}`
+      ? [
+          `Title: ${selectedArticle.title}`,
+          `Source: ${selectedArticle.source} | URL: ${selectedArticle.url}`,
+          `Published: ${selectedArticle.published_at}`,
+          `Sentiment: ${selectedArticle.sentiment} | Importance: ${selectedArticle.importance}`,
+          selectedArticle.tags ? `Tags: ${selectedArticle.tags}` : "",
+          selectedArticle.key_entities ? `Key Entities: ${selectedArticle.key_entities}` : "",
+          selectedArticle.topic_analysis ? `AI Analysis: ${selectedArticle.topic_analysis}` : "",
+          `Summary: ${selectedArticle.summary}`,
+          `Content: ${(selectedArticle.content ?? "").slice(0, 1200)}`,
+        ].filter(Boolean).join("\n")
       : undefined;
+
+    // Snapshot history before adding new user message (max 10 turns = 20 messages)
+    const historyToSend = chatMessages.slice(-20).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
 
     addChatMessage({ id: crypto.randomUUID(), role: "user", content: msg });
     setInput("");
@@ -63,7 +81,7 @@ export default function ChatBot() {
     abortRef.current = controller;
 
     try {
-      for await (const event of streamChat(msg, ctx, activeTopicId, controller.signal)) {
+      for await (const event of streamChat(msg, ctx, activeTopicId, controller.signal, historyToSend)) {
         if (controller.signal.aborted) break;
         if (event.type === "status") {
           setChatStatus(event.value);
