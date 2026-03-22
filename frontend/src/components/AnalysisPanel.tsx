@@ -14,8 +14,6 @@ import {
   Minus,
   BarChart3,
   Clock,
-  ChevronDown,
-  ChevronUp,
 } from "lucide-react";
 import { useStore } from "@/stores/useStore";
 import {
@@ -74,7 +72,6 @@ export default function AnalysisPanel() {
   const [stats, setStats] = useState<InsightSummary>(EMPTY_SUMMARY);
   const [insight, setInsight] = useState<TopicInsight>(EMPTY_INSIGHT);
   const [trending, setTrending] = useState<TrendingData | null>(null);
-  const [showTagsAll, setShowTagsAll] = useState(false);
 
   useEffect(() => {
     if (activeTopicId == null) return;
@@ -99,14 +96,17 @@ export default function AnalysisPanel() {
 
   const sentDist = insight.sentiment_distribution;
   const sentTotal = Object.values(sentDist).reduce((a, b) => a + b, 0) || 1;
-  const visibleTags = showTagsAll ? insight.top_tags.slice(0, 15) : insight.top_tags.slice(0, 6);
   const negativeRate = sentTotal > 0 ? (sentDist.negative ?? 0) / sentTotal : 0;
   const importantRate = insight.article_count > 0 ? stats.important_count / insight.article_count : 0;
   const avgRelevance = trending?.avg_topic_relevance ?? 0;
 
+  const prevCount = insight.previous_count ?? 0;
+  const surgeRate = prevCount > 0 ? insight.trend_delta / prevCount : 0;
+
   const alertSignals: { level: "high" | "medium"; text: string }[] = [];
-  if (negativeRate >= 0.5) alertSignals.push({ level: "high", text: `Negative sentiment at ${Math.round(negativeRate * 100)}%` });
-  if (insight.trend_delta >= 15) alertSignals.push({ level: "medium", text: `Volume surge +${insight.trend_delta} vs previous period` });
+  if (negativeRate >= 0.4) alertSignals.push({ level: "high", text: `Negative sentiment at ${Math.round(negativeRate * 100)}%` });
+  else if (negativeRate >= 0.3) alertSignals.push({ level: "medium", text: `Negative sentiment elevated at ${Math.round(negativeRate * 100)}%` });
+  if (surgeRate >= 1.0) alertSignals.push({ level: "medium", text: `Volume surge +${Math.round(surgeRate * 100)}% vs previous period` });
   if (importantRate >= 0.4) alertSignals.push({ level: "medium", text: `Important article density ${Math.round(importantRate * 100)}%` });
 
   const renderLiveTab = () => (
@@ -247,47 +247,12 @@ export default function AnalysisPanel() {
           </div>
         </div>
 
-        {/* ── Volume Trend ── */}
-        {trending && trending.daily.length > 0 && (
-          <div>
-            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-2">Volume Trend</h3>
-            <div className="space-y-1.5">
-              {trending.daily.map((d) => {
-                const maxTotal = Math.max(...trending.daily.map((dd) => dd.total), 1);
-                const pct = (d.total / maxTotal) * 100;
-                return (
-                  <div key={d.day} className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted w-10 shrink-0 tabular-nums">{d.day.slice(5)}</span>
-                    <div className="flex-1 h-3.5 rounded bg-surface-hover overflow-hidden flex">
-                      <div className="bg-positive/60 h-full transition-all" style={{ width: `${d.total > 0 ? (d.positive / d.total) * pct : 0}%` }} />
-                      <div className="bg-muted/25 h-full transition-all"  style={{ width: `${d.total > 0 ? (d.neutral  / d.total) * pct : 0}%` }} />
-                      <div className="bg-negative/60 h-full transition-all" style={{ width: `${d.total > 0 ? (d.negative / d.total) * pct : 0}%` }} />
-                    </div>
-                    <span className="text-[10px] text-muted tabular-nums w-5 text-right">{d.total}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* ── Top Tags ── */}
+        {/* ── Top Tags (always show full list from API) ── */}
         {insight.top_tags.length > 0 && (
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted">Top Tags</h3>
-              {insight.top_tags.length > 6 && (
-                <button
-                  onClick={() => setShowTagsAll((v) => !v)}
-                  className="text-[10px] text-muted hover:text-foreground inline-flex items-center gap-0.5"
-                >
-                  {showTagsAll ? "Less" : `+${insight.top_tags.length - 6} more`}
-                  {showTagsAll ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                </button>
-              )}
-            </div>
+            <h3 className="text-[10px] font-semibold uppercase tracking-wider text-muted mb-2">Top Tags</h3>
             <div className="flex flex-wrap gap-1.5">
-              {visibleTags.map(({ tag, count }) => (
+              {insight.top_tags.map(({ tag, count }) => (
                 <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] bg-surface-hover text-muted">
                   {tag}
                   <span className="text-[9px] opacity-50 font-medium">{count}</span>
