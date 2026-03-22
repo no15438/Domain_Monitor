@@ -1,0 +1,137 @@
+@import "tailwindcss";
+
+:root {
+  --background: #0f172a;
+  --foreground: #f1f5f9;
+  --surface: #1e293b;
+  --surface-hover: #334155;
+  --border: #334155;
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --muted: #94a3b8;
+  --positive: #22c55e;
+  --negative: #ef4444;
+  --important: #f59e0b;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-muted: var(--muted);
+  --color-positive: var(--positive);
+  --color-negative: var(--negative);
+  --color-important: var(--important);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+/* Markdown in chat */
+.chat-markdown p {
+  margin-bottom: 0.5em;
+}
+.chat-markdown ul,
+.chat-markdown ol {
+  padding-left: 1.25em;
+  margin-bottom: 0.5em;
+}
+.chat-markdown code {
+  background: var(--surface);
+  padding: 0.125em 0.375em;
+  border-radius: 4px;
+  font-size: 0.875em;
+}
+.chat-markdown pre {
+  background: var(--surface);
+  padding: 0.75em;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin-bottom: 0.5em;
+}
+.chat-markdown a {
+  color: var(--accent-hover);
+  text-decoration: underline;
+  overflow-wrap: break-word;
+  word-break: break-all;
+}
+.chat-markdown {
+  overflow-wrap: break-word;
+  word-wrap: break-word;
+}
+
+/* AI Summary markdown */
+.ai-summary-content h2 {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-top: 1em;
+  margin-bottom: 0.4em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+.ai-summary-content h2:first-child {
+  margin-top: 0;
+}
+.ai-summary-content p {
+  margin-bottom: 0.5em;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.ai-summary-content ul,
+.ai-summary-content ol {
+  padding-left: 1.25em;
+  margin-bottom: 0.5em;
+}
+.ai-summary-content li {
+  color: var(--muted);
+  margin-bottom: 0.25em;
+  line-height: 1.6;
+}
+.ai-summary-content strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.ai-summary-content a {
+  color: var(--accent-hover);
+  text-decoration: underline;
+  overflow-wrap: break-word;
+}
+.ai-summary-content code {
+  background: var(--surface);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.animate-slide-in-right {
+  animation: slide-in-right 0.18s ease-out both;
+}
