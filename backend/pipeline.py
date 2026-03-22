@@ -1,0 +1,497 @@
+"""
+Data Pipeline — Recall -> Cluster -> Score -> Enrich -> Store
+
+  Stage 1  COLLECT       Cheap, fast, cast wide net (no LLM) — parallel HTTP
+  Stage 2  URL DEDUP     Remove exact URL duplicates
+  Stage 3  RELEVANCE     Topic keyword gate (no LLM)
+  Stage 4  EVENT CLUSTER Group similar articles into events
+  Stage 5  CANONICAL     Pick best representative per event (multi-signal scoring)
+  Stage 6  ENRICH        LLM summarize/tag/sentiment (batch: 4 articles/call)
+  Stage 7  STORE         SQLite + ChromaDB
+"""
+
+import json
+import logging
+import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+
+log = logging.getLogger("pipeline")
+
+
+def _normalize_date(raw: str) -> str:
+    """Convert any date string to ISO 8601 (YYYY-MM-DD HH:MM:SS) for consistent SQLite sorting."""
+    if not raw:
+        return ""
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%a, %d %b %Y %H:%M:%S %Z",
+        "%a, %d %b %Y %H:%M:%S %z",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            dt = datetime.strptime(raw, fmt)
+            if dt.tzinfo:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            continue
+    return raw
+
+from llm_client import llm_chat
+from database import (
+    get_recent_urls,
+    get_recent_article_stubs,
+    insert_article,
+    get_keywords,
+    get_topics,
+    get_topic_feeds,
+)
+from vector_store import add_article
+from relevance import (
+    normalize_url,
+    dedup_by_similarity,
+    filter_by_relevance,
+    cluster_by_event,
+    select_representatives,
+)
+from config import settings
+
+from collectors import newsapi_collector, rss_collector, googlenews_collector, eventregistry_collector
+
+BATCH_ENRICH_PROMPT = """You are a research analyst. Analyze the following {n} articles against the research context.
+
+=== RESEARCH CONTEXT ===
+Topic: {topic_name}
+Research Direction: {research_brief}
+Keywords: {topic_keywords}
+Key Entities: {entities}
+Geographic Scope: {geographic_scope}
+Sector Scope: {sector_scope}
+Research Angles:
+{angles}
+========================
+
+{articles_block}
+
+Return a JSON array of exactly {n} objects, one per article, in the SAME ORDER as listed above.
+Each object must have:
+- "summary": 1-2 sentence summary, max 120 chars, same language as article
+- "tags": array of 2-5 topic tags, same language as article
+- "sentiment": "positive" | "negative" | "neutral" — from this research direction's perspective
+- "importance": integer 1-10 (10 = directly addresses a key research angle)
+- "topic_relevance": float 0.0-1.0
+- "key_entities": array of up to 5 relevant entities
+- "topic_analysis": 1 sentence on how the article relates to the research, same language
+
+Return ONLY a valid JSON array. No markdown fences, no explanation."""
+
+# How many articles to send per LLM batch call.
+# MLX runs inference sequentially; batching reduces call overhead dramatically.
+BATCH_SIZE = 4
+MAX_ENRICH = 12
+
+
+# ── Stage 1: COLLECT (Recall — no LLM, parallel HTTP) ────────────
+
+
+def _collect_for_keywords(keyword_list: list[str], max_per_source: int) -> list[dict]:
+    """Dispatch all (keyword × source) requests in parallel using a thread pool.
+    HTTP I/O is the bottleneck here; parallelism cuts wall-clock time from
+    O(keywords × 3) sequential calls down to roughly one round-trip."""
+
+    def _fetch(source: str, kw: str) -> list[dict]:
+        try:
+            if source == "googlenews":
+                return _tag(googlenews_collector.collect(kw, max_results=max_per_source), "googlenews")
+            if source == "newsapi":
+                return _tag(newsapi_collector.collect(kw, max_results=max_per_source), "newsapi")
+            # eventregistry
+            return _tag(eventregistry_collector.collect(kw, max_events=max_per_source), "eventregistry")
+        except Exception as e:
+            log.warning("collect error [%s/%s]: %s", source, kw, e)
+            return []
+
+    tasks = [(src, kw) for kw in keyword_list for src in ("googlenews", "newsapi", "eventregistry")]
+    raw: list[dict] = []
+    # Cap workers: each task is pure network I/O, 8–12 concurrent is safe
+    workers = min(len(tasks), 12)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch, src, kw): (src, kw) for src, kw in tasks}
+        for future in as_completed(futures):
+            raw.extend(future.result())
+    return raw
+
+
+def _collect_rss(feed_urls: list[str]) -> list[dict]:
+    items = rss_collector.collect_multiple(feed_urls, max_per_feed=30)
+    return _tag(items, "rss")
+
+
+def _tag(items: list[dict], source_type: str) -> list[dict]:
+    for item in items:
+        item["_source_type"] = source_type
+    return items
+
+
+# ── Stage 2: URL DEDUP (with normalization) ──────────
+
+
+def _url_dedup(items: list[dict], existing_urls: set[str]) -> list[dict]:
+    """Exact URL dedup using normalized URLs.
+
+    Also rewrites item["url"] to its canonical form so downstream stages
+    and the database always store a clean URL.
+    """
+    seen: set[str] = set()
+    # Pre-normalise the existing URL set once
+    norm_existing = {normalize_url(u) for u in existing_urls}
+    unique: list[dict] = []
+    for item in items:
+        raw_url = item.get("url", "")
+        if not raw_url:
+            continue
+        norm = normalize_url(raw_url)
+        if norm in norm_existing or norm in seen:
+            continue
+        seen.add(norm)
+        item["url"] = norm  # store canonical form
+        unique.append(item)
+    return unique
+
+
+# ── Stage 2.5: SEMANTIC DEDUP ─────────────────────────
+
+
+def _semantic_dedup(
+    items: list[dict],
+    existing_stubs: list[dict] | None = None,
+    within_threshold: float = 0.72,
+    cross_threshold: float = 0.88,
+) -> list[dict]:
+    """Remove near-duplicate articles using TF-IDF cosine similarity."""
+    if not items:
+        return items
+
+    items = dedup_by_similarity(items, threshold=within_threshold)
+
+    if not existing_stubs or not items:
+        return items
+
+    for s in existing_stubs:
+        s["_is_existing"] = True
+    combined = existing_stubs + items
+    deduped = dedup_by_similarity(combined, threshold=cross_threshold)
+    result = [a for a in deduped if not a.get("_is_existing")]
+    for s in existing_stubs:
+        s.pop("_is_existing", None)
+    return result
+
+
+# ── Stage 3: RELEVANCE FILTER ────────────────────────
+
+
+def _relevance_filter(items: list[dict], keyword_list: list[str], min_score: float = 0.1) -> list[dict]:
+    if not keyword_list:
+        return items
+    return filter_by_relevance(items, keyword_list, min_score=min_score)
+
+
+# ── Stage 4+5: EVENT CLUSTER + CANONICAL SELECTION ───
+
+
+def _parse_weights() -> dict:
+    """Parse scoring_weights from config string like 'authority=0.35,coverage=0.25,...'"""
+    try:
+        pairs = settings.scoring_weights.split(",")
+        return {k.strip(): float(v.strip()) for k, v in (p.split("=") for p in pairs)}
+    except Exception:
+        return {}
+
+
+def _cluster_and_select(items: list[dict], cluster_threshold: float | None = None) -> tuple[list[list[dict]], list[dict]]:
+    """Cluster items by event, then pick best representative per cluster."""
+    total = len(items)
+
+    for idx, item in enumerate(items):
+        item["_collect_idx"] = idx
+
+    threshold = cluster_threshold if cluster_threshold is not None else settings.event_cluster_threshold
+    clusters = cluster_by_event(items, title_threshold=threshold, time_window_hours=72)
+
+    weights = _parse_weights() or None
+    canonicals = select_representatives(
+        clusters,
+        total_collected=total,
+        weights=weights,
+        max_canonicals=MAX_ENRICH,
+    )
+    return clusters, canonicals
+
+
+# ── Stage 6: ENRICH (LLM batch — only canonicals) ────────────────
+
+_DEFAULT_PARSED = {
+    "summary": "",
+    "tags": [],
+    "sentiment": "neutral",
+    "importance": 5,
+    "topic_relevance": 0.5,
+    "key_entities": [],
+    "topic_analysis": "",
+}
+
+
+def _call_batch_llm(
+    batch: list[dict],
+    context_params: dict,
+) -> list[dict]:
+    """Send one LLM call for a batch of articles. Returns a list of parsed dicts
+    (same length as batch). Falls back to defaults if parsing fails."""
+    articles_block = "\n\n".join(
+        f"[Article {i + 1}]\nTitle: {item['title']}\nContent: {(item.get('content') or '')[:700]}"
+        for i, item in enumerate(batch)
+    )
+    prompt = BATCH_ENRICH_PROMPT.format(n=len(batch), articles_block=articles_block, **context_params)
+    try:
+        raw = llm_chat([{"role": "user", "content": prompt}])
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+        parsed_list = json.loads(raw)
+        if isinstance(parsed_list, list) and len(parsed_list) == len(batch):
+            return parsed_list
+        log.warning("batch LLM returned %s items, expected %d — using defaults",
+                    len(parsed_list) if isinstance(parsed_list, list) else type(parsed_list), len(batch))
+    except Exception as e:
+        log.error("batch LLM parse error: %s", e)
+    # Fallback: fill with defaults (no extra LLM call — keeps MLX happy)
+    return [{**_DEFAULT_PARSED, "summary": (item.get("content") or "")[:120]} for item in batch]
+
+
+def _enrich_and_store(
+    canonicals: list[dict],
+    topic_id: int | None,
+    existing_urls: set[str],
+    topic_name: str = "",
+    topic_keywords: list[str] | None = None,
+    research_brief: str = "",
+    research_config: dict | None = None,
+) -> list[dict]:
+    cfg = research_config or {}
+    context_params = {
+        "topic_name": topic_name or "General",
+        "research_brief": research_brief or "(not specified)",
+        "topic_keywords": ", ".join(topic_keywords) if topic_keywords else "general",
+        "entities": ", ".join(cfg.get("entities", [])) or "(not specified)",
+        "geographic_scope": ", ".join(cfg.get("geographic_scope", [])) or "(not specified)",
+        "sector_scope": ", ".join(cfg.get("sector_scope", [])) or "(not specified)",
+        "angles": "\n".join(
+            f"  {i+1}. {a}" for i, a in enumerate(cfg.get("angles", []))
+        ) or "  (not specified)",
+    }
+
+    # Filter out already-seen URLs first so we only enrich genuinely new articles
+    new_items: list[dict] = []
+    for item in canonicals:
+        if item["url"] in existing_urls:
+            continue
+        existing_urls.add(item["url"])
+        new_items.append(item)
+
+    if not new_items:
+        return []
+
+    # Process in batches of BATCH_SIZE — each batch = one LLM call
+    new_articles: list[dict] = []
+    for batch_start in range(0, len(new_items), BATCH_SIZE):
+        batch = new_items[batch_start: batch_start + BATCH_SIZE]
+        parsed_list = _call_batch_llm(batch, context_params)
+        log.info("enriched batch %d (%d articles)", batch_start // BATCH_SIZE + 1, len(batch))
+
+        for item, parsed in zip(batch, parsed_list):
+            article_id = str(uuid.uuid4())
+            breakdown = item.get("_source_breakdown", {})
+            article = {
+                "id": article_id,
+                "title": item["title"],
+                "summary": parsed.get("summary", ""),
+                "content": item["content"],
+                "source": item.get("source", ""),
+                "url": item["url"],
+                "tags": json.dumps(parsed.get("tags", []), ensure_ascii=False),
+                "sentiment": parsed.get("sentiment", "neutral"),
+                "importance": int(parsed.get("importance", 5)),
+                "source_type": item.get("_source_type", "search"),
+                "topic_id": topic_id,
+                "published_at": _normalize_date(item.get("published_date", "")),
+                "event_id": item.get("_event_id", ""),
+                "is_canonical": item.get("_is_canonical", 1),
+                "event_size": item.get("_event_size", 1),
+                "source_score": item.get("_source_score", 0),
+                "source_breakdown": json.dumps(breakdown, ensure_ascii=False),
+                "topic_relevance": float(parsed.get("topic_relevance", 0.5)),
+                "key_entities": json.dumps(parsed.get("key_entities", []), ensure_ascii=False),
+                "topic_analysis": parsed.get("topic_analysis", ""),
+            }
+            insert_article(article)
+
+            vector_text = (
+                f"{item['title']}. {parsed.get('summary', '')}. "
+                f"{(item.get('content') or '')[:500]}"
+            )
+            meta = {
+                "title": item["title"],
+                "url": item["url"],
+                "source": item.get("source", ""),
+                "sentiment": parsed.get("sentiment", "neutral"),
+            }
+            if topic_id is not None:
+                meta["topic_id"] = str(topic_id)
+            add_article(article_id, vector_text, meta)
+            new_articles.append(article)
+
+            # Store non-canonical cluster members (no LLM enrichment)
+            for alt in item.get("_cluster_alts", []):
+                if alt["url"] in existing_urls:
+                    continue
+                existing_urls.add(alt["url"])
+                alt_breakdown = alt.get("_source_breakdown", {})
+                insert_article({
+                    "id": str(uuid.uuid4()),
+                    "title": alt["title"],
+                    "summary": "",
+                    "content": alt["content"],
+                    "source": alt.get("source", ""),
+                    "url": alt["url"],
+                    "tags": "[]",
+                    "sentiment": "neutral",
+                    "importance": 0,
+                    "source_type": alt.get("_source_type", "search"),
+                    "topic_id": topic_id,
+                    "published_at": _normalize_date(alt.get("published_date", "")),
+                    "event_id": alt.get("_event_id", ""),
+                    "is_canonical": 0,
+                    "event_size": alt.get("_event_size", 1),
+                    "source_score": alt.get("_source_score", 0),
+                    "source_breakdown": json.dumps(alt_breakdown, ensure_ascii=False),
+                    "topic_relevance": 0.0,
+                    "key_entities": "[]",
+                    "topic_analysis": "",
+                })
+
+    return new_articles
+
+
+# ── Orchestrator ──────────────────────────────────────
+
+
+def _run_for_topic(topic_id: int, existing_urls: set[str]) -> list[dict]:
+    kws = get_keywords(topic_id)
+    keyword_list = [kw["keyword"] for kw in kws]
+
+    topics = get_topics()
+    topic_name = ""
+    research_brief = ""
+    research_config: dict = {}
+    pipeline_cfg: dict = {}
+    for t in topics:
+        if t["id"] == topic_id:
+            topic_name = t["name"]
+            research_brief = t.get("research_brief") or ""
+            try:
+                raw_cfg = t.get("research_config") or "{}"
+                research_config = json.loads(raw_cfg) if isinstance(raw_cfg, str) else (raw_cfg or {})
+            except Exception:
+                research_config = {}
+            try:
+                raw_pcfg = t.get("pipeline_config") or "{}"
+                pipeline_cfg = json.loads(raw_pcfg) if isinstance(raw_pcfg, str) else (raw_pcfg or {})
+            except Exception:
+                pipeline_cfg = {}
+            break
+
+    # Topic-level overrides for pipeline thresholds
+    relevance_min = float(pipeline_cfg.get("relevance_min_score", 0.05))
+    cluster_threshold = float(pipeline_cfg.get("cluster_threshold", settings.event_cluster_threshold))
+    dedup_threshold = float(pipeline_cfg.get("dedup_threshold", 0.82))
+    crossrun_dedup_threshold = float(pipeline_cfg.get("crossrun_dedup_threshold", 0.88))
+
+    entities = research_config.get("entities", [])
+    geo_scope = research_config.get("geographic_scope", [])
+    extra_search_terms = [e for e in entities[:5]]
+
+    # Stage 1: COLLECT
+    raw: list[dict] = []
+    all_search_terms = keyword_list + extra_search_terms
+    if all_search_terms:
+        raw.extend(_collect_for_keywords(all_search_terms, max_per_source=10))
+    feed_rows = get_topic_feeds(topic_id)
+    feed_urls = [f["feed_url"] for f in feed_rows]
+    global_feeds = [u.strip() for u in settings.global_rss_feeds.split(",") if u.strip()]
+    all_feeds = feed_urls + global_feeds
+    if all_feeds:
+        raw.extend(_collect_rss(all_feeds))
+
+    # Stage 2: URL DEDUP (normalized)
+    url_unique = _url_dedup(raw, existing_urls)
+
+    # Stage 2.5: SEMANTIC DEDUP — uses topic-level thresholds
+    existing_stubs = get_recent_article_stubs(topic_id=topic_id, hours=48)
+    sem_unique = _semantic_dedup(url_unique, existing_stubs=existing_stubs,
+                                  within_threshold=dedup_threshold,
+                                  cross_threshold=crossrun_dedup_threshold)
+
+    # Stage 3: RELEVANCE FILTER — uses topic-level min score
+    relevance_terms = keyword_list + [e for e in entities] + [g for g in geo_scope]
+    relevant = _relevance_filter(sem_unique, relevance_terms, min_score=relevance_min) if relevance_terms else sem_unique
+
+    # Stage 4+5: EVENT CLUSTER + CANONICAL SELECTION — uses topic-level cluster threshold
+    clusters, canonicals = _cluster_and_select(relevant, cluster_threshold=cluster_threshold)
+
+    log.info(
+        "topic=%d: %d collected → %d url-unique → %d sem-unique → %d relevant → %d events → %d canonicals → enriching",
+        topic_id, len(raw), len(url_unique), len(sem_unique), len(relevant), len(clusters), len(canonicals),
+    )
+
+    # Stage 6+7: ENRICH & STORE (full research context)
+    return _enrich_and_store(
+        canonicals, topic_id, existing_urls,
+        topic_name, keyword_list,
+        research_brief, research_config,
+    )
+
+
+def run_pipeline_once(topic_id: int | None = None) -> list[dict]:
+    existing_urls = get_recent_urls(hours=72)
+    all_new: list[dict] = []
+
+    if topic_id is not None:
+        all_new.extend(_run_for_topic(topic_id, existing_urls))
+    else:
+        topics = get_topics()
+        if topics:
+            for topic in topics:
+                all_new.extend(_run_for_topic(topic["id"], existing_urls))
+        else:
+            keyword_list = [k.strip() for k in settings.monitor_keywords.split(",") if k.strip()]
+            if keyword_list:
+                raw = _collect_for_keywords(keyword_list, max_per_source=15)
+                global_feeds = [u.strip() for u in settings.global_rss_feeds.split(",") if u.strip()]
+                if global_feeds:
+                    raw.extend(_collect_rss(global_feeds))
+                url_unique = _url_dedup(raw, existing_urls)
+                existing_stubs = get_recent_article_stubs(topic_id=None, hours=48)
+                sem_unique = _semantic_dedup(url_unique, existing_stubs=existing_stubs)
+                relevant = _relevance_filter(sem_unique, keyword_list)
+                clusters, canonicals = _cluster_and_select(relevant)
+                log.info(
+                    "global: %d collected → %d url-unique → %d sem-unique → %d relevant → %d events → %d canonicals → enriching",
+                    len(raw), len(url_unique), len(sem_unique), len(relevant), len(clusters), len(canonicals),
+                )
+                all_new.extend(_enrich_and_store(canonicals, None, existing_urls))
+
+    return all_new
