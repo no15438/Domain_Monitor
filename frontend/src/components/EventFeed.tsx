@@ -17,6 +17,8 @@ import {
   ChevronUp,
   Filter,
   X,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { useStore } from "@/stores/useStore";
 import { fetchArticles, createSSEConnection } from "@/lib/api";
@@ -49,20 +51,26 @@ export default function EventFeed() {
     selectedKnowledgeEventId,
     selectedKnowledgeEventTitle,
     setSelectedKnowledgeEvent,
+    eventFeedPrefsByTopic,
+    setEventFeedPrefs,
   } = useStore();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>("all");
-  const [sortMode, setSortMode] = useState<SortMode>("relevance");
+  const topicPrefs = activeTopicId != null
+    ? eventFeedPrefsByTopic[activeTopicId]
+    : undefined;
+  const sentimentFilter = (topicPrefs?.sentimentFilter ?? "all") as SentimentFilter;
+  const sortMode = (topicPrefs?.sortMode ?? "relevance") as SortMode;
 
   const [newArticleIds, setNewArticleIds] = useState<Set<string>>(new Set());
+  const [sseState, setSseState] = useState<"connecting" | "open" | "reconnecting" | "closed">("connecting");
 
   // Archived fold
   const [archivedArticles, setArchivedArticles] = useState<Article[]>([]);
   const [archivedCount, setArchivedCount] = useState(0);
-  const [showArchived, setShowArchived] = useState(false);
+  const showArchived = topicPrefs?.showArchived ?? false;
 
   // Fetch active articles — re-fetch when event filter changes
   useEffect(() => {
@@ -103,40 +111,52 @@ export default function EventFeed() {
   // SSE: structured delta → update articles store + signal new events for evolution
   useEffect(() => {
     // Don't prepend SSE articles when viewing a filtered event — avoids stale data appearing
-    if (selectedKnowledgeEventId) return;
+    if (selectedKnowledgeEventId) {
+      setSseState("closed");
+      return;
+    }
 
     let alive = true;
-    const sse = createSSEConnection((delta) => {
-      if (!alive) return;
+    const sse = createSSEConnection(
+      (delta) => {
+        if (!alive) return;
 
-      const { articles: incoming, new_event_ids } = delta;
+        const { articles: incoming } = delta;
 
-      const filtered =
-        activeTopicId != null
-          ? incoming.filter((a) => a.topic_id === activeTopicId)
-          : incoming;
+        const filtered =
+          activeTopicId != null
+            ? incoming.filter((a) => a.topic_id === activeTopicId)
+            : incoming;
 
-      if (filtered.length > 0) {
-        const articleIds = filtered.map((a) => a.id);
-        setNewArticleIds((prev) => {
-          const next = new Set(prev);
-          articleIds.forEach((id) => next.add(id));
-          return next;
-        });
-        prependArticles(filtered);
-        setTimeout(() => {
-          if (!alive) return;
+        if (filtered.length > 0) {
+          const articleIds = filtered.map((a) => a.id);
           setNewArticleIds((prev) => {
             const next = new Set(prev);
-            articleIds.forEach((id) => next.delete(id));
+            articleIds.forEach((id) => next.add(id));
             return next;
           });
-        }, 10_000);
-      }
+          prependArticles(filtered);
+          setTimeout(() => {
+            if (!alive) return;
+            setNewArticleIds((prev) => {
+              const next = new Set(prev);
+              articleIds.forEach((id) => next.delete(id));
+              return next;
+            });
+          }, 10_000);
+        }
 
-      refreshInsights();
-    });
-    return () => { alive = false; sse.close(); };
+        refreshInsights();
+      },
+      (state) => {
+        if (!alive) return;
+        setSseState(state);
+      },
+    );
+    return () => {
+      alive = false;
+      sse.close();
+    };
   }, [activeTopicId, prependArticles, refreshInsights, selectedKnowledgeEventId]);
 
   function handleArticleRemoved(id: string) {
@@ -247,6 +267,21 @@ export default function EventFeed() {
         </div>
       )}
 
+      {sseState !== "open" && !selectedKnowledgeEventId && (
+        <div className="px-4 py-1.5 border-b border-border/80 bg-surface-hover/50 flex items-center gap-1.5 text-[11px] text-muted">
+          {sseState === "reconnecting" ? (
+            <WifiOff className="w-3 h-3 text-important" />
+          ) : (
+            <Wifi className="w-3 h-3" />
+          )}
+          <span>
+            {sseState === "connecting"
+              ? "Connecting live updates…"
+              : "Live updates reconnecting…"}
+          </span>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="px-4 py-2 border-b border-border space-y-2">
         {/* View label + sort */}
@@ -259,7 +294,7 @@ export default function EventFeed() {
           {/* Sort toggle */}
           <div className="ml-auto flex items-center gap-1">
             <button
-              onClick={() => setSortMode("relevance")}
+              onClick={() => activeTopicId != null && setEventFeedPrefs(activeTopicId, { sortMode: "relevance" })}
               className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-colors ${
                 sortMode === "relevance"
                   ? "bg-important/15 text-important"
@@ -271,7 +306,7 @@ export default function EventFeed() {
               Priority
             </button>
             <button
-              onClick={() => setSortMode("latest")}
+              onClick={() => activeTopicId != null && setEventFeedPrefs(activeTopicId, { sortMode: "latest" })}
               className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-colors ${
                 sortMode === "latest"
                   ? "bg-accent/15 text-accent"
@@ -293,7 +328,7 @@ export default function EventFeed() {
             return (
               <button
                 key={key}
-                onClick={() => setSentimentFilter(key)}
+                onClick={() => activeTopicId != null && setEventFeedPrefs(activeTopicId, { sentimentFilter: key })}
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium transition-colors ${
                   isActive ? activeColor : "text-muted hover:bg-surface-hover"
                 }`}
@@ -331,7 +366,7 @@ export default function EventFeed() {
         {archivedCount > 0 && (
           <div className="mt-4">
             <button
-              onClick={() => setShowArchived((v) => !v)}
+              onClick={() => activeTopicId != null && setEventFeedPrefs(activeTopicId, { showArchived: !showArchived })}
               className="w-full flex items-center gap-2 py-2 text-[11px] text-muted hover:text-foreground transition-colors"
             >
               <div className="flex-1 border-t border-border/60" />

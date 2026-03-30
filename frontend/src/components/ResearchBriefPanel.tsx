@@ -36,6 +36,7 @@ import {
   type ResearchConfig,
   type Topic,
 } from "@/lib/api";
+import { runWithAction } from "@/lib/api/shared";
 
 interface Props {
   topic: Topic;
@@ -78,7 +79,11 @@ function ChipList({
             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${accentClass}`}
           >
             {it.label}
-            <button onClick={() => onRemove(it.id)} className="hover:text-negative transition-colors">
+            <button
+              onClick={() => onRemove(it.id)}
+              aria-label={`Remove ${it.label}`}
+              className="hover:text-negative transition-colors"
+            >
               <X className="w-2.5 h-2.5" />
             </button>
           </span>
@@ -96,7 +101,7 @@ function ChipList({
           <button type="submit" className="px-2 py-1 rounded-md text-xs bg-accent text-white hover:bg-accent-hover">
             Add
           </button>
-          <button type="button" onClick={() => setAdding(false)} className="text-muted hover:text-foreground">
+          <button type="button" onClick={() => setAdding(false)} aria-label="Cancel" className="text-muted hover:text-foreground">
             <X className="w-3 h-3" />
           </button>
         </form>
@@ -142,11 +147,12 @@ function Section({
 }
 
 export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props) {
-  const { activeTopicId, keywords, setKeywords } = useStore();
+  const { activeTopicId, keywords, setKeywords, addToast, getActionState } = useStore();
   const [brief, setBrief] = useState(topic.research_brief ?? "");
   const [config, setConfig] = useState<ResearchConfig>(() => parseResearchConfig(topic));
   const [saved, setSaved] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
   const [promptInput, setPromptInput] = useState("");
   const [feeds, setFeeds] = useState<TopicFeed[]>([]);
@@ -159,7 +165,15 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
     setBrief(topic.research_brief ?? "");
     setConfig(parseResearchConfig(topic));
     setSaved(true);
+    setSaveError(null);
   }, [topic]);
+
+  useEffect(
+    () => () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (activeTopicId != null) {
@@ -180,13 +194,27 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
         if (activeTopicId == null) return;
+        const actionKey = `ui:research-brief:auto-save:${activeTopicId}`;
+        if (getActionState(actionKey).status === "running") return;
         setSaving(true);
-        await updateTopicBrief(activeTopicId, val);
-        setSaving(false);
-        setSaved(true);
+        setSaveError(null);
+        try {
+          const result = await runWithAction(actionKey, () => updateTopicBrief(activeTopicId, val));
+          if (result.status === "error") {
+            throw new Error(result.message || "save failed");
+          }
+          setSaved(true);
+        } catch (e) {
+          if (process.env.NODE_ENV === "development") console.warn("[save-brief]", e);
+          setSaveError("Auto-save failed");
+          addToast("Auto-save failed. Your edits are still local.", "warn");
+          setSaved(false);
+        } finally {
+          setSaving(false);
+        }
       }, 1200);
     },
-    [activeTopicId],
+    [activeTopicId, addToast, getActionState],
   );
 
   function handleBriefChange(val: string) {
@@ -196,11 +224,25 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
 
   async function handleManualSave() {
     if (activeTopicId == null) return;
+    const actionKey = `ui:research-brief:manual-save:${activeTopicId}`;
+    if (getActionState(actionKey).status === "running") return;
     setSaving(true);
+    setSaveError(null);
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    await updateTopicBrief(activeTopicId, brief);
-    setSaving(false);
-    setSaved(true);
+    try {
+      const result = await runWithAction(actionKey, () => updateTopicBrief(activeTopicId, brief));
+      if (result.status === "error") {
+        throw new Error(result.message || "save failed");
+      }
+      setSaved(true);
+    } catch (e) {
+      if (process.env.NODE_ENV === "development") console.warn("[manual-save-brief]", e);
+      setSaveError("Save failed");
+      setSaved(false);
+      addToast("Failed to save research direction.", "error");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function persistConfig(updated: ResearchConfig) {
@@ -213,37 +255,53 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
   // ── AI Generate Full Plan ──
   async function handleGenerate() {
     if (activeTopicId == null || !promptInput.trim()) return;
+    const actionKey = `ui:research-brief:generate-plan:${activeTopicId}`;
+    if (getActionState(actionKey).status === "running") return;
     setGenerating(true);
-    const res = await generateResearchPlan(activeTopicId, promptInput.trim());
-    if (res.status === "ok" && res.plan) {
-      setBrief(res.plan.research_brief);
-      setSaved(true);
-      setConfig({
-        angles: res.plan.angles ?? [],
-        entities: res.plan.entities ?? [],
-        geographic_scope: res.plan.geographic_scope ?? [],
-        sector_scope: res.plan.sector_scope ?? [],
-      });
-      const kwData = await fetchKeywords(activeTopicId);
-      setKeywords(kwData.keywords);
-      const feedData = await fetchTopicFeeds(activeTopicId);
-      setFeeds(feedData.feeds);
-      setPromptInput("");
-      setOpenSections(new Set(["keywords", "angles", "entities", "feeds"]));
+    try {
+      const res = await runWithAction(actionKey, () => generateResearchPlan(activeTopicId, promptInput.trim()));
+      if (res.status === "ok" && res.plan) {
+        setBrief(res.plan.research_brief);
+        setSaved(true);
+        setConfig({
+          angles: res.plan.angles ?? [],
+          entities: res.plan.entities ?? [],
+          geographic_scope: res.plan.geographic_scope ?? [],
+          sector_scope: res.plan.sector_scope ?? [],
+        });
+        const kwData = await fetchKeywords(activeTopicId);
+        setKeywords(kwData.keywords);
+        const feedData = await fetchTopicFeeds(activeTopicId);
+        setFeeds(feedData.feeds);
+        setPromptInput("");
+        setOpenSections(new Set(["keywords", "angles", "entities", "feeds"]));
+      } else {
+        addToast(res.message || "Failed to generate research plan.", "error");
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === "development") console.warn("[generate-plan]", e);
+      addToast("Failed to generate research plan.", "error");
+    } finally {
+      setGenerating(false);
     }
-    setGenerating(false);
   }
 
   // ── Keyword CRUD ──
   async function handleAddKw(kw: string) {
     if (activeTopicId == null) return;
-    await addKeyword(kw, "", activeTopicId);
-    const data = await fetchKeywords(activeTopicId);
-    setKeywords(data.keywords);
+    const actionKey = `ui:research-brief:add-keyword:${activeTopicId}`;
+    if (getActionState(actionKey).status === "running") return;
+    await runWithAction(actionKey, async () => {
+      await addKeyword(kw, "", activeTopicId);
+      const data = await fetchKeywords(activeTopicId);
+      setKeywords(data.keywords);
+    });
   }
 
   async function handleRemoveKw(id: string) {
-    await removeKeyword(Number(id));
+    const actionKey = `ui:research-brief:remove-keyword:${id}`;
+    if (getActionState(actionKey).status === "running") return;
+    await runWithAction(actionKey, () => removeKeyword(Number(id)));
     if (activeTopicId != null) {
       const data = await fetchKeywords(activeTopicId);
       setKeywords(data.keywords);
@@ -253,13 +311,19 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
   // ── Feed CRUD ──
   async function handleAddFeed(url: string) {
     if (activeTopicId == null) return;
-    await addTopicFeed(activeTopicId, url);
-    const d = await fetchTopicFeeds(activeTopicId);
-    setFeeds(d.feeds);
+    const actionKey = `ui:research-brief:add-feed:${activeTopicId}`;
+    if (getActionState(actionKey).status === "running") return;
+    await runWithAction(actionKey, async () => {
+      await addTopicFeed(activeTopicId, url);
+      const d = await fetchTopicFeeds(activeTopicId);
+      setFeeds(d.feeds);
+    });
   }
 
   async function handleRemoveFeed(id: string) {
-    await removeTopicFeed(Number(id));
+    const actionKey = `ui:research-brief:remove-feed:${id}`;
+    if (getActionState(actionKey).status === "running") return;
+    await runWithAction(actionKey, () => removeTopicFeed(Number(id)));
     if (activeTopicId != null) {
       const d = await fetchTopicFeeds(activeTopicId);
       setFeeds(d.feeds);
@@ -330,7 +394,7 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
             />
             <button
               onClick={handleGenerate}
-              disabled={generating || !promptInput.trim()}
+              disabled={generating || !promptInput.trim() || (activeTopicId != null && getActionState(`ui:research-brief:generate-plan:${activeTopicId}`).status === "running")}
               className="self-end p-2 rounded-lg bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors shrink-0"
               title="Generate research plan"
             >
@@ -357,11 +421,12 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
           />
           <div className="flex items-center justify-between mt-1">
             <span className="text-[10px] text-muted">
-              {saving ? "Saving…" : saved ? "✓ Saved" : "Unsaved"}
+              {saving ? "Saving…" : saveError ? saveError : saved ? "✓ Saved" : "Unsaved"}
             </span>
             {!saved && (
               <button
                 onClick={handleManualSave}
+                disabled={activeTopicId != null && getActionState(`ui:research-brief:manual-save:${activeTopicId}`).status === "running"}
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-muted hover:text-foreground hover:bg-surface-hover transition-colors"
               >
                 <Save className="w-3 h-3" />
@@ -390,6 +455,7 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
                 <span className="flex-1">{a}</span>
                 <button
                   onClick={() => removeFromConfig("angles", a)}
+                  aria-label={`Remove angle ${a}`}
                   className="opacity-0 group-hover:opacity-100 text-muted hover:text-negative transition-opacity shrink-0 mt-0.5"
                 >
                   <X className="w-3 h-3" />
@@ -447,6 +513,7 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
                 </span>
                 <button
                   onClick={() => handleRemoveFeed(String(f.id))}
+                  aria-label={`Remove feed ${f.label || f.feed_url}`}
                   className="opacity-0 group-hover:opacity-100 text-muted hover:text-negative transition-opacity"
                 >
                   <X className="w-3 h-3" />
@@ -494,7 +561,7 @@ function AddItemInline({ placeholder, onAdd }: { placeholder: string; onAdd: (v:
       <button type="submit" className="px-2 py-1 rounded-md text-xs bg-accent text-white hover:bg-accent-hover">
         Add
       </button>
-      <button type="button" onClick={() => setAdding(false)} className="text-muted hover:text-foreground">
+      <button type="button" onClick={() => setAdding(false)} aria-label="Cancel" className="text-muted hover:text-foreground">
         <X className="w-3 h-3" />
       </button>
     </form>

@@ -28,6 +28,7 @@ import {
 import Link from "next/link";
 import { TOPIC_COLORS } from "@/lib/constants";
 import { useStore } from "@/stores/useStore";
+import { runWithAction } from "@/lib/api/shared";
 
 const COLORS = TOPIC_COLORS;
 
@@ -62,7 +63,7 @@ export default function TopicCard({
   dragHandleAttributes,
   isDragging = false,
 }: TopicCardProps) {
-  const addToast = useStore((s) => s.addToast);
+  const { addToast, getActionState } = useStore();
   const total = topic.article_count;
   const sentTotal = Object.values(topic.sentiment).reduce((a, b) => a + b, 0) || 1;
   const posPct = ((topic.sentiment.positive ?? 0) / sentTotal) * 100;
@@ -125,7 +126,11 @@ export default function TopicCard({
   async function doArchive(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    const r = await archiveTopic(topic.id);
+    const actionKey = `ui:topic-card:archive:${topic.id}`;
+    if (getActionState(actionKey).status === "running") return;
+    const r = await runWithAction(actionKey, () => archiveTopic(topic.id), {
+      errorMessage: "Could not archive topic",
+    });
     if (r.status === "error") {
       addToast("Could not archive topic — please try again", "error");
       return;
@@ -137,7 +142,11 @@ export default function TopicCard({
   async function doRestore(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    const r = await unarchiveTopic(topic.id);
+    const actionKey = `ui:topic-card:restore:${topic.id}`;
+    if (getActionState(actionKey).status === "running") return;
+    const r = await runWithAction(actionKey, () => unarchiveTopic(topic.id), {
+      errorMessage: "Could not restore topic",
+    });
     if (r.status === "error") {
       addToast("Could not restore topic — please try again", "error");
       return;
@@ -149,7 +158,11 @@ export default function TopicCard({
   async function doDelete(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    const r = await deleteTopic(topic.id);
+    const actionKey = `ui:topic-card:delete:${topic.id}`;
+    if (getActionState(actionKey).status === "running") return;
+    const r = await runWithAction(actionKey, () => deleteTopic(topic.id), {
+      errorMessage: "Could not delete topic",
+    });
     if (r.status === "error") {
       addToast("Could not delete topic — please try again", "error");
       return;
@@ -229,10 +242,11 @@ export default function TopicCard({
               <div className="flex gap-2 mt-1">
                 <button
                   type="button"
+                  disabled={getActionState(`ui:topic-card:archive:${topic.id}`).status === "running"}
                   onClick={doArchive}
-                  className="px-4 py-1.5 rounded-lg text-xs font-medium bg-muted text-foreground hover:bg-muted/80 transition-colors"
+                  className="px-4 py-1.5 rounded-lg text-xs font-medium bg-muted text-foreground hover:bg-muted/80 transition-colors disabled:opacity-60"
                 >
-                  Archive
+                  {getActionState(`ui:topic-card:archive:${topic.id}`).status === "running" ? "Archiving..." : "Archive"}
                 </button>
                 <button
                   type="button"
@@ -259,10 +273,11 @@ export default function TopicCard({
               <div className="flex gap-2 mt-1">
                 <button
                   type="button"
+                  disabled={getActionState(`ui:topic-card:restore:${topic.id}`).status === "running"}
                   onClick={doRestore}
-                  className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover transition-colors"
+                  className="px-4 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-60"
                 >
-                  Restore
+                  {getActionState(`ui:topic-card:restore:${topic.id}`).status === "running" ? "Restoring..." : "Restore"}
                 </button>
                 <button
                   type="button"
@@ -292,10 +307,11 @@ export default function TopicCard({
               <div className="flex gap-2 mt-1">
                 <button
                   type="button"
+                  disabled={getActionState(`ui:topic-card:delete:${topic.id}`).status === "running"}
                   onClick={doDelete}
-                  className="px-4 py-1.5 rounded-lg text-xs font-medium bg-negative text-white hover:bg-negative/80 transition-colors"
+                  className="px-4 py-1.5 rounded-lg text-xs font-medium bg-negative text-white hover:bg-negative/80 transition-colors disabled:opacity-60"
                 >
-                  Delete permanently
+                  {getActionState(`ui:topic-card:delete:${topic.id}`).status === "running" ? "Deleting..." : "Delete permanently"}
                 </button>
                 <button
                   type="button"

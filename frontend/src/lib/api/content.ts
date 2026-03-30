@@ -155,7 +155,7 @@ export async function triggerFetch(
 ): Promise<{ status: string }> {
   const params = new URLSearchParams();
   if (topicId != null) params.set("topic_id", String(topicId));
-  const res = await fetch(`${BASE}/api/fetch-now?${params}`, {
+  const res = await fetchWithRetry(`${BASE}/api/fetch-now?${params}`, {
     method: "POST",
   });
   return safeJson(res, { status: "error" });
@@ -163,14 +163,25 @@ export async function triggerFetch(
 
 export async function fetchFetchStatus(
   topicId?: number | null,
-): Promise<{ running: boolean }> {
+): Promise<{
+  running: boolean;
+  status?: string;
+  error?: string | null;
+  result_summary?: string | null;
+  finished_at?: string | null;
+}> {
   const params = new URLSearchParams();
   if (topicId != null) params.set("topic_id", String(topicId));
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${BASE}/api/fetch-now/status?${params}&ts=${Date.now()}`,
     { cache: "no-store" },
   );
-  return safeJson(res, { running: false }, undefined, { silent: true });
+  return safeJson(
+    res,
+    { running: false, status: "idle", error: null, result_summary: null, finished_at: null },
+    undefined,
+    { silent: true },
+  );
 }
 
 export interface SSEDelta {
@@ -180,13 +191,44 @@ export interface SSEDelta {
   new_event_ids: string[];
 }
 
-export function createSSEConnection(onDelta: (delta: SSEDelta) => void) {
+export type SSEConnectionState =
+  | "connecting"
+  | "open"
+  | "reconnecting"
+  | "closed";
+
+export function createSSEConnection(
+  onDelta: (delta: SSEDelta) => void,
+  onStateChange?: (state: SSEConnectionState) => void,
+) {
   let closed = false;
   let evtSource: EventSource | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryAttempt = 0;
+  const maxDelayMs = 15000;
+
+  function clearReconnectTimer() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  }
+
+  function nextDelayMs() {
+    const base = Math.min(1000 * 2 ** retryAttempt, maxDelayMs);
+    retryAttempt += 1;
+    return base;
+  }
 
   function connect() {
     if (closed) return;
+    onStateChange?.(retryAttempt === 0 ? "connecting" : "reconnecting");
     evtSource = new EventSource(`${BASE}/api/stream`);
+
+    evtSource.onopen = () => {
+      retryAttempt = 0;
+      onStateChange?.("open");
+    };
 
     evtSource.onmessage = (event) => {
       try {
@@ -210,7 +252,10 @@ export function createSSEConnection(onDelta: (delta: SSEDelta) => void) {
     evtSource.onerror = () => {
       evtSource?.close();
       evtSource = null;
-      if (!closed) setTimeout(connect, 5000);
+      if (closed) return;
+      onStateChange?.("reconnecting");
+      clearReconnectTimer();
+      reconnectTimer = setTimeout(connect, nextDelayMs());
     };
   }
 
@@ -219,8 +264,10 @@ export function createSSEConnection(onDelta: (delta: SSEDelta) => void) {
   return {
     close() {
       closed = true;
+      clearReconnectTimer();
       evtSource?.close();
       evtSource = null;
+      onStateChange?.("closed");
     },
   };
 }

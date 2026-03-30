@@ -27,18 +27,39 @@ export interface Toast {
 export interface GlobalOverviewSlice {
   content: string;
   isGenerating: boolean;
+  lastStatus?: string;
+  lastError?: string | null;
 }
 
 export interface LiveSummarySlice {
   content: string;
   generatedAt: string | null;
   isGenerating: boolean;
+  lastStatus?: string;
+  lastError?: string | null;
+}
+
+export type ActionStatus = "idle" | "running" | "success" | "error";
+
+export interface ActionState {
+  status: ActionStatus;
+  startedAt: number | null;
+  finishedAt: number | null;
+  error: string | null;
+  result: string | null;
+}
+
+export interface EventFeedPrefs {
+  sentimentFilter: "all" | "positive" | "neutral" | "negative";
+  sortMode: "relevance" | "latest";
+  showArchived: boolean;
 }
 
 const globalOverviewPollers = new Map<number, ReturnType<typeof setInterval>>();
 const liveSummaryPollers = new Map<number, ReturnType<typeof setInterval>>();
 // key = String(topicId ?? "null")
 const fetchPollers = new Map<string, ReturnType<typeof setInterval>>();
+const taskNotifications = new Map<string, string>();
 
 function stopGlobalOverviewPoll(topicId: number) {
   const id = globalOverviewPollers.get(topicId);
@@ -61,6 +82,26 @@ function stopFetchPoll(key: string) {
   if (id !== undefined) {
     clearInterval(id);
     fetchPollers.delete(key);
+  }
+}
+
+function notifyTaskOutcome(
+  key: string,
+  status: string | undefined,
+  error: string | null | undefined,
+  resultSummary: string | null | undefined,
+  addToast: (message: string, level?: Toast["level"]) => void,
+) {
+  const marker = `${status || "unknown"}|${error || ""}|${resultSummary || ""}`;
+  if (taskNotifications.get(key) === marker) return;
+  taskNotifications.set(key, marker);
+
+  if (status === "error") {
+    addToast(error || "Background task failed", "error");
+    return;
+  }
+  if (status === "done" && resultSummary) {
+    addToast(resultSummary, "info");
   }
 }
 
@@ -104,6 +145,11 @@ interface AppState {
   insightRefreshKey: number;
   globalOverviewByTopic: Record<number, GlobalOverviewSlice>;
   liveSummaryByTopic: Record<number, LiveSummarySlice>;
+  actionStates: Record<string, ActionState>;
+  analysisTabByTopic: Record<number, "realtime" | "overview">;
+  analysisWindowByTopic: Record<number, "24h" | "7d">;
+  briefCollapsedByTopic: Record<number, boolean>;
+  eventFeedPrefsByTopic: Record<number, EventFeedPrefs>;
   toasts: Toast[];
 
   setTopics: (t: Topic[]) => void;
@@ -131,6 +177,33 @@ interface AppState {
   startLiveSummaryGeneration: (topicId: number) => Promise<void>;
   ensureLiveSummaryPoll: (topicId: number) => void;
   hydrateFetchStatus: (topicId: number | null) => Promise<void>;
+  beginAction: (key: string) => void;
+  endAction: (key: string, status: Exclude<ActionStatus, "running">, error?: string | null, result?: string | null) => void;
+  setActionRunning: (key: string, running: boolean) => void;
+  getActionState: (key: string) => ActionState;
+  clearActionState: (key: string) => void;
+  setAnalysisTab: (topicId: number, tab: "realtime" | "overview") => void;
+  setAnalysisWindow: (topicId: number, window: "24h" | "7d") => void;
+  setBriefCollapsed: (topicId: number, collapsed: boolean) => void;
+  setEventFeedPrefs: (topicId: number, patch: Partial<EventFeedPrefs>) => void;
+}
+
+function defaultActionState(): ActionState {
+  return {
+    status: "idle",
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+    result: null,
+  };
+}
+
+function defaultEventFeedPrefs(): EventFeedPrefs {
+  return {
+    sentimentFilter: "all",
+    sortMode: "relevance",
+    showArchived: false,
+  };
 }
 
 export const useStore = create<AppState>()(
@@ -152,6 +225,11 @@ export const useStore = create<AppState>()(
   insightRefreshKey: 0,
   globalOverviewByTopic: {},
   liveSummaryByTopic: {},
+  actionStates: {},
+  analysisTabByTopic: {},
+  analysisWindowByTopic: {},
+  briefCollapsedByTopic: {},
+  eventFeedPrefsByTopic: {},
   toasts: [],
 
   addToast: (message, level = "error") => {
@@ -163,11 +241,61 @@ export const useStore = create<AppState>()(
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 
+  beginAction: (key) =>
+    set((s) => ({
+      actionStates: {
+        ...s.actionStates,
+        [key]: {
+          status: "running",
+          startedAt: Date.now(),
+          finishedAt: null,
+          error: null,
+          result: null,
+        },
+      },
+    })),
+  endAction: (key, status, error = null, result = null) =>
+    set((s) => ({
+      actionStates: {
+        ...s.actionStates,
+        [key]: {
+          status,
+          startedAt: s.actionStates[key]?.startedAt ?? Date.now(),
+          finishedAt: Date.now(),
+          error,
+          result,
+        },
+      },
+    })),
+  setActionRunning: (key, running) =>
+    running ? get().beginAction(key) : get().endAction(key, "success"),
+  getActionState: (key) => get().actionStates[key] ?? defaultActionState(),
+  clearActionState: (key) =>
+    set((s) => {
+      const next = { ...s.actionStates };
+      delete next[key];
+      return { actionStates: next };
+    }),
+  setAnalysisTab: (topicId, tab) =>
+    set((s) => ({ analysisTabByTopic: { ...s.analysisTabByTopic, [topicId]: tab } })),
+  setAnalysisWindow: (topicId, window) =>
+    set((s) => ({ analysisWindowByTopic: { ...s.analysisWindowByTopic, [topicId]: window } })),
+  setBriefCollapsed: (topicId, collapsed) =>
+    set((s) => ({ briefCollapsedByTopic: { ...s.briefCollapsedByTopic, [topicId]: collapsed } })),
+  setEventFeedPrefs: (topicId, patch) =>
+    set((s) => ({
+      eventFeedPrefsByTopic: {
+        ...s.eventFeedPrefsByTopic,
+        [topicId]: { ...(s.eventFeedPrefsByTopic[topicId] ?? defaultEventFeedPrefs()), ...patch },
+      },
+    })),
+
   ensureLiveSummaryPoll: (topicId: number) => {
     if (liveSummaryPollers.has(topicId)) return;
 
     const tick = async () => {
       try {
+        const prevGenerating = get().liveSummaryByTopic[topicId]?.isGenerating ?? false;
         const [st, data] = await Promise.all([
           fetchLiveSummaryStatus(topicId),
           fetchCachedSummary(topicId),
@@ -177,9 +305,30 @@ export const useStore = create<AppState>()(
         set((s) => ({
           liveSummaryByTopic: {
             ...s.liveSummaryByTopic,
-            [topicId]: { content, generatedAt, isGenerating: st.generating },
+            [topicId]: {
+              content,
+              generatedAt,
+              isGenerating: st.generating,
+              lastStatus: st.status,
+              lastError: st.error ?? null,
+            },
           },
         }));
+        if (prevGenerating && !st.generating) {
+          get().endAction(
+            `task:live-summary:${topicId}`,
+            st.status === "error" ? "error" : "success",
+            st.error ?? null,
+            st.result_summary ?? null,
+          );
+          notifyTaskOutcome(
+            `live-${topicId}`,
+            st.status,
+            st.error,
+            st.result_summary,
+            get().addToast,
+          );
+        }
         if (!st.generating) {
           stopLiveSummaryPoll(topicId);
         }
@@ -192,6 +341,8 @@ export const useStore = create<AppState>()(
               content: s.liveSummaryByTopic[topicId]?.content ?? "",
               generatedAt: s.liveSummaryByTopic[topicId]?.generatedAt ?? null,
               isGenerating: false,
+              lastStatus: "error",
+              lastError: "Failed to poll AI analysis status",
             },
           },
         }));
@@ -214,9 +365,26 @@ export const useStore = create<AppState>()(
       set((s) => ({
         liveSummaryByTopic: {
           ...s.liveSummaryByTopic,
-          [topicId]: { content, generatedAt, isGenerating: st.generating },
+          [topicId]: {
+            content,
+            generatedAt,
+            isGenerating: st.generating,
+            lastStatus: st.status,
+            lastError: st.error ?? null,
+          },
         },
       }));
+      if (st.generating) {
+        const current = get().getActionState(`task:live-summary:${topicId}`);
+        if (current.status !== "running") get().beginAction(`task:live-summary:${topicId}`);
+      } else {
+        get().endAction(
+          `task:live-summary:${topicId}`,
+          st.status === "error" ? "error" : "success",
+          st.error ?? null,
+          st.result_summary ?? null,
+        );
+      }
       if (st.generating) {
         get().ensureLiveSummaryPoll(topicId);
       }
@@ -234,6 +402,7 @@ export const useStore = create<AppState>()(
       return;
     }
 
+    get().beginAction(`task:live-summary:${topicId}`);
     set((s) => ({
       liveSummaryByTopic: {
         ...s.liveSummaryByTopic,
@@ -241,6 +410,8 @@ export const useStore = create<AppState>()(
           content: s.liveSummaryByTopic[topicId]?.content ?? "",
           generatedAt: s.liveSummaryByTopic[topicId]?.generatedAt ?? null,
           isGenerating: true,
+          lastStatus: "running",
+          lastError: null,
         },
       },
     }));
@@ -252,6 +423,7 @@ export const useStore = create<AppState>()(
         return;
       }
     } catch {
+      get().endAction(`task:live-summary:${topicId}`, "error", "Failed to start AI analysis generation");
       set((s) => ({
         liveSummaryByTopic: {
           ...s.liveSummaryByTopic,
@@ -272,6 +444,7 @@ export const useStore = create<AppState>()(
 
     const tick = async () => {
       try {
+        const prevGenerating = get().globalOverviewByTopic[topicId]?.isGenerating ?? false;
         const [st, data] = await Promise.all([
           fetchGlobalOverviewStatus(topicId),
           fetchGlobalOverview(topicId),
@@ -280,9 +453,29 @@ export const useStore = create<AppState>()(
         set((s) => ({
           globalOverviewByTopic: {
             ...s.globalOverviewByTopic,
-            [topicId]: { content, isGenerating: st.generating },
+            [topicId]: {
+              content,
+              isGenerating: st.generating,
+              lastStatus: st.status,
+              lastError: st.error ?? null,
+            },
           },
         }));
+        if (prevGenerating && !st.generating) {
+          get().endAction(
+            `task:global-overview:${topicId}`,
+            st.status === "error" ? "error" : "success",
+            st.error ?? null,
+            st.result_summary ?? null,
+          );
+          notifyTaskOutcome(
+            `global-${topicId}`,
+            st.status,
+            st.error,
+            st.result_summary,
+            get().addToast,
+          );
+        }
         if (!st.generating) {
           stopGlobalOverviewPoll(topicId);
         }
@@ -294,6 +487,8 @@ export const useStore = create<AppState>()(
             [topicId]: {
               content: s.globalOverviewByTopic[topicId]?.content ?? "",
               isGenerating: false,
+              lastStatus: "error",
+              lastError: "Failed to poll global overview status",
             },
           },
         }));
@@ -315,9 +510,25 @@ export const useStore = create<AppState>()(
       set((s) => ({
         globalOverviewByTopic: {
           ...s.globalOverviewByTopic,
-          [topicId]: { content, isGenerating: st.generating },
+          [topicId]: {
+            content,
+            isGenerating: st.generating,
+            lastStatus: st.status,
+            lastError: st.error ?? null,
+          },
         },
       }));
+      if (st.generating) {
+        const current = get().getActionState(`task:global-overview:${topicId}`);
+        if (current.status !== "running") get().beginAction(`task:global-overview:${topicId}`);
+      } else {
+        get().endAction(
+          `task:global-overview:${topicId}`,
+          st.status === "error" ? "error" : "success",
+          st.error ?? null,
+          st.result_summary ?? null,
+        );
+      }
       if (st.generating) {
         get().ensureGlobalOverviewPoll(topicId);
       }
@@ -335,12 +546,15 @@ export const useStore = create<AppState>()(
       return;
     }
 
+    get().beginAction(`task:global-overview:${topicId}`);
     set((s) => ({
       globalOverviewByTopic: {
         ...s.globalOverviewByTopic,
         [topicId]: {
           content: s.globalOverviewByTopic[topicId]?.content ?? "",
           isGenerating: true,
+          lastStatus: "running",
+          lastError: null,
         },
       },
     }));
@@ -353,6 +567,7 @@ export const useStore = create<AppState>()(
         return;
       }
     } catch {
+      get().endAction(`task:global-overview:${topicId}`, "error", "Failed to start global overview generation");
       set((s) => ({
         globalOverviewByTopic: {
           ...s.globalOverviewByTopic,
@@ -372,21 +587,49 @@ export const useStore = create<AppState>()(
     const key = String(topicId ?? "null");
     if (fetchPollers.has(key)) return; // already polling
     try {
-      const { running } = await fetchFetchStatus(topicId);
+      const st = await fetchFetchStatus(topicId);
+      const { running } = st;
       if (!running) {
         // Clear stale fetchingTopicId if it was pointing to this topic
         set((s) => s.fetchingTopicId === topicId ? { fetchingTopicId: null } : {});
+        get().endAction(
+          `task:fetch:${topicId ?? "all"}`,
+          st.status === "error" ? "error" : "success",
+          st.error ?? null,
+          st.result_summary ?? null,
+        );
+        notifyTaskOutcome(
+          `fetch-${topicId}`,
+          st.status,
+          st.error,
+          st.result_summary,
+          get().addToast,
+        );
         return;
       }
 
       // Backend fetch is still running — restore fetchingTopicId and start polling
       set({ fetchingTopicId: topicId });
+      get().beginAction(`task:fetch:${topicId ?? "all"}`);
 
       const tick = async () => {
         try {
           const st = await fetchFetchStatus(topicId);
           if (!st.running) {
             stopFetchPoll(key);
+            get().endAction(
+              `task:fetch:${topicId ?? "all"}`,
+              st.status === "error" ? "error" : "success",
+              st.error ?? null,
+              st.result_summary ?? null,
+            );
+            notifyTaskOutcome(
+              `fetch-${topicId}`,
+              st.status,
+              st.error,
+              st.result_summary,
+              get().addToast,
+            );
             // Refresh articles once fetch completes
             const data = await fetchArticles(50, 0, topicId);
             set((s) => ({
@@ -465,7 +708,14 @@ export const useStore = create<AppState>()(
     }),
     {
       name: "domain-monitor-chat",
-      partialize: (state) => ({ chatMessagesByTopic: state.chatMessagesByTopic }),
+      partialize: (state) => ({
+        chatMessagesByTopic: state.chatMessagesByTopic,
+        analysisTabByTopic: state.analysisTabByTopic,
+        analysisWindowByTopic: state.analysisWindowByTopic,
+        briefCollapsedByTopic: state.briefCollapsedByTopic,
+        eventFeedPrefsByTopic: state.eventFeedPrefsByTopic,
+        actionStates: state.actionStates,
+      }),
     }
   )
 );

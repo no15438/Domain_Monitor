@@ -9,9 +9,10 @@ import {
   removeTopicFeed,
   type TopicFeed,
 } from "@/lib/api";
+import { runWithAction } from "@/lib/api/shared";
 
 export default function FeedManager() {
-  const { activeTopicId } = useStore();
+  const { activeTopicId, addToast, getActionState } = useStore();
   const [feeds, setFeeds] = useState<TopicFeed[]>([]);
   const [open, setOpen] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -30,19 +31,34 @@ export default function FeedManager() {
     const url = newUrl.trim();
     if (!url || activeTopicId == null) return;
     setLoading(true);
-    await addTopicFeed(activeTopicId, url);
-    setNewUrl("");
-    setAdding(false);
-    const d = await fetchTopicFeeds(activeTopicId);
-    setFeeds(d.feeds);
-    setLoading(false);
+    try {
+      await addTopicFeed(activeTopicId, url);
+      setNewUrl("");
+      setAdding(false);
+      const d = await fetchTopicFeeds(activeTopicId);
+      setFeeds(d.feeds);
+    } catch (e) {
+      if (process.env.NODE_ENV === "development") console.warn("[add-feed]", e);
+      addToast("Failed to add RSS feed. Please try again.", "error");
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleRemove(id: number) {
-    await removeTopicFeed(id);
-    if (activeTopicId != null) {
-      const d = await fetchTopicFeeds(activeTopicId);
-      setFeeds(d.feeds);
+    const actionKey = `ui:feed-manager:remove:${id}`;
+    if (getActionState(actionKey).status === "running") return;
+    try {
+      await runWithAction(actionKey, () => removeTopicFeed(id), {
+        errorMessage: "Failed to remove RSS feed",
+      });
+      if (activeTopicId != null) {
+        const d = await fetchTopicFeeds(activeTopicId);
+        setFeeds(d.feeds);
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === "development") console.warn("[remove-feed]", e);
+      addToast("Failed to remove RSS feed. Please try again.", "error");
     }
   }
 
@@ -68,6 +84,7 @@ export default function FeedManager() {
             <span className="text-xs font-medium text-foreground">RSS Feeds</span>
             <button
               onClick={() => setOpen(false)}
+              aria-label="Close RSS feeds panel"
               className="text-muted hover:text-foreground"
             >
               <X className="w-3.5 h-3.5" />
@@ -90,9 +107,13 @@ export default function FeedManager() {
                 </span>
                 <button
                   onClick={() => handleRemove(f.id)}
-                  className="opacity-0 group-hover:opacity-100 text-muted hover:text-negative transition-opacity"
+                  disabled={getActionState(`ui:feed-manager:remove:${f.id}`).status === "running"}
+                  aria-label={`Remove feed ${f.label || f.feed_url}`}
+                  className="opacity-0 group-hover:opacity-100 text-muted hover:text-negative transition-opacity disabled:opacity-60"
                 >
-                  <X className="w-3 h-3" />
+                  {getActionState(`ui:feed-manager:remove:${f.id}`).status === "running"
+                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                    : <X className="w-3 h-3" />}
                 </button>
               </div>
             ))}
@@ -123,6 +144,7 @@ export default function FeedManager() {
               <button
                 type="button"
                 onClick={() => setAdding(false)}
+                aria-label="Cancel adding RSS feed"
                 className="text-muted hover:text-foreground"
               >
                 <X className="w-3.5 h-3.5" />

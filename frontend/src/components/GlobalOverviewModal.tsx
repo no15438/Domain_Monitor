@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import { X, Sparkles, Loader2, RefreshCw } from "lucide-react";
@@ -20,19 +20,38 @@ export default function GlobalOverviewModal({
   const content = slice?.content ?? "";
   const isGenerating = slice?.isGenerating ?? false;
   const [isChecking, setIsChecking] = useState(true);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setIsChecking(true);
     void hydrateGlobalOverview(topicId).finally(() => setIsChecking(false));
   }, [topicId, hydrateGlobalOverview]);
 
+  useEffect(() => {
+    closeBtnRef.current?.focus();
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   return (
     <AnimatePresence>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
+        <button
+          type="button"
+          className="absolute inset-0"
+          aria-label="Close overview dialog"
+          onClick={onClose}
+        />
         <motion.div
           initial={{ opacity: 0, scale: 0.95, y: 20 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.95, y: 20 }}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="global-overview-title"
           className="w-full max-w-4xl max-h-[85vh] flex flex-col bg-surface border border-border rounded-xl shadow-2xl overflow-hidden"
         >
           <div className="flex items-center justify-between p-4 border-b border-border bg-surface-hover/30">
@@ -40,7 +59,7 @@ export default function GlobalOverviewModal({
               <div className="p-1.5 rounded-lg bg-accent/20">
                 <Sparkles className="w-5 h-5 text-accent" />
               </div>
-              <h2 className="text-lg font-bold">Global Overview</h2>
+              <h2 id="global-overview-title" className="text-lg font-bold">Global Overview</h2>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -54,6 +73,7 @@ export default function GlobalOverviewModal({
               </button>
               <button
                 type="button"
+                ref={closeBtnRef}
                 onClick={onClose}
                 className="p-1.5 rounded-md text-muted hover:text-foreground hover:bg-surface-hover transition-colors"
                 title="Close (generation continues in background)"

@@ -10,6 +10,7 @@ import {
 import { useStore } from "@/stores/useStore";
 import ThemeToggle from "@/components/ThemeToggle";
 import { triggerFetch, fetchFetchStatus } from "@/lib/api";
+import { runWithAction } from "@/lib/api/shared";
 
 function useLastFetchedLabel(articles: { created_at: string }[]): string | null {
   if (!articles.length) return null;
@@ -45,9 +46,12 @@ export default function TopicHeader({
     activeTopicId,
     hydrateFetchStatus,
     articles,
+    getActionState,
   } = useStore();
 
-  const isFetching = fetchingTopicId === activeTopicId && activeTopicId !== null;
+  const isFetching =
+    (fetchingTopicId === activeTopicId && activeTopicId !== null) ||
+    (activeTopicId != null && getActionState(`task:fetch:${activeTopicId}`).status === "running");
   const lastFetchedLabel = useLastFetchedLabel(articles);
 
   // Periodic fallback status check — recovers fetch state after page refresh
@@ -91,7 +95,11 @@ export default function TopicHeader({
     if (isFetching) return;
     setFetchingTopic(activeTopicId);
     try {
-      const result = await triggerFetch(activeTopicId);
+      const result = await runWithAction(
+        `task:fetch:${activeTopicId ?? "all"}`,
+        () => triggerFetch(activeTopicId),
+        { errorMessage: "Failed to trigger fetch" },
+      );
       if (result.status === "error") {
         useStore.getState().addToast("Failed to trigger fetch — please try again", "error");
         setFetchingTopic(null);

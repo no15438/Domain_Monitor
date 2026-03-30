@@ -30,6 +30,7 @@ import {
 } from "@/lib/api";
 import { useStore } from "@/stores/useStore";
 import { TOPIC_COLORS } from "@/lib/constants";
+import { runWithAction } from "@/lib/api/shared";
 
 const COLORS = TOPIC_COLORS;
 
@@ -70,10 +71,12 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [submittingCreate, setSubmittingCreate] = useState(false);
   const [createStep, setCreateStep] = useState<"form" | "confirm">("form");
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
   const addToast = useStore((s) => s.addToast);
+  const getActionState = useStore((s) => s.getActionState);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -93,6 +96,7 @@ export default function Home() {
       // Persist asynchronously; roll back on error
       reorderTopics(reordered.map((t) => t.id)).catch(() => {
         setTopics(prevTopicsRef.current);
+        addToast("Failed to save topic order. Reverted to previous order.", "warn");
       });
       prevTopicsRef.current = reordered;
       return reordered;
@@ -126,7 +130,14 @@ export default function Home() {
     const name = newName.trim();
     if (!name) return;
     try {
-      const result = await createTopic(name, newColor);
+      if (submittingCreate) return;
+      if (getActionState("ui:home:create-topic").status === "running") return;
+      setSubmittingCreate(true);
+      const result = await runWithAction(
+        "ui:home:create-topic",
+        () => createTopic(name, newColor),
+        { errorMessage: "Failed to create topic" },
+      );
       if (result.status === "error") {
         addToast(
           result.message === "Topic already exists"
@@ -143,6 +154,8 @@ export default function Home() {
     } catch (e) {
       if (process.env.NODE_ENV === "development") console.warn("[create-topic]", e);
       addToast("Failed to create topic — please try again", "error");
+    } finally {
+      setSubmittingCreate(false);
     }
   }
 
@@ -272,10 +285,11 @@ export default function Home() {
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
+                        disabled={submittingCreate || getActionState("ui:home:create-topic").status === "running"}
                         onClick={() => void handleCreateConfirmed()}
-                        className="px-4 py-2 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover"
+                        className="px-4 py-2 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50"
                       >
-                        Create topic
+                        {submittingCreate || getActionState("ui:home:create-topic").status === "running" ? "Creating..." : "Create topic"}
                       </button>
                       <button
                         type="button"

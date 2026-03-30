@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { Plus, X, Layers } from "lucide-react";
 import { useStore } from "@/stores/useStore";
 import { createTopic, deleteTopic, fetchTopics } from "@/lib/api";
+import { runWithAction } from "@/lib/api/shared";
 
 const COLORS = [
   "#6366f1", "#8b5cf6", "#ec4899", "#f43f5e",
@@ -12,7 +13,7 @@ const COLORS = [
 ];
 
 export default function TopicTabs() {
-  const { topics, setTopics, activeTopicId, setActiveTopicId } = useStore();
+  const { topics, setTopics, activeTopicId, setActiveTopicId, addToast, getActionState } = useStore();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
@@ -20,7 +21,15 @@ export default function TopicTabs() {
   async function handleCreate() {
     const name = newName.trim();
     if (!name) return;
-    await createTopic(name, newColor);
+    const actionKey = "ui:topic-tabs:create";
+    if (getActionState(actionKey).status === "running") return;
+    const result = await runWithAction(actionKey, () => createTopic(name, newColor), {
+      errorMessage: "Failed to create topic",
+    });
+    if (result.status === "error") {
+      addToast(result.message || "Failed to create topic", "error");
+      return;
+    }
     setNewName("");
     setCreating(false);
     const data = await fetchTopics();
@@ -29,7 +38,15 @@ export default function TopicTabs() {
 
   async function handleDelete(id: number, e: React.MouseEvent) {
     e.stopPropagation();
-    await deleteTopic(id);
+    const actionKey = `ui:topic-tabs:delete:${id}`;
+    if (getActionState(actionKey).status === "running") return;
+    const result = await runWithAction(actionKey, () => deleteTopic(id), {
+      errorMessage: "Failed to delete topic",
+    });
+    if (result.status === "error") {
+      addToast(result.message || "Failed to delete topic", "error");
+      return;
+    }
     if (activeTopicId === id) setActiveTopicId(null);
     const data = await fetchTopics();
     setTopics(data.topics);
@@ -73,7 +90,11 @@ export default function TopicTabs() {
           {t.name}
           <span
             onClick={(e) => handleDelete(t.id, e)}
-            className="ml-0.5 opacity-0 group-hover:opacity-100 transition-opacity text-muted hover:text-negative"
+            className={`ml-0.5 transition-opacity text-muted hover:text-negative ${
+              getActionState(`ui:topic-tabs:delete:${t.id}`).status === "running"
+                ? "opacity-100"
+                : "opacity-0 group-hover:opacity-100"
+            }`}
           >
             <X className="w-3 h-3" />
           </span>
@@ -111,9 +132,10 @@ export default function TopicTabs() {
           />
           <button
             type="submit"
+            disabled={getActionState("ui:topic-tabs:create").status === "running"}
             className="px-2 py-1 rounded-md text-xs bg-accent text-white hover:bg-accent-hover"
           >
-            Create
+            {getActionState("ui:topic-tabs:create").status === "running" ? "Creating..." : "Create"}
           </button>
           <button
             type="button"

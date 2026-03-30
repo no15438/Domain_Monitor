@@ -58,6 +58,7 @@ export default function MacroAnalysisPanel({
   const globalSlice = useStore((s) =>
     activeTopicId != null ? s.globalOverviewByTopic[activeTopicId] : undefined
   );
+  const getActionState = useStore((s) => s.getActionState);
   const refreshKey = useStore((s) => s.insightRefreshKey);
   const selectedKnowledgeEventId = useStore((s) => s.selectedKnowledgeEventId);
   const setSelectedKnowledgeEvent = useStore((s) => s.setSelectedKnowledgeEvent);
@@ -73,7 +74,10 @@ export default function MacroAnalysisPanel({
   } = useTopicKnowledgeData(activeTopicId);
 
   const globalContent = overviewArtifact?.content ?? globalSlice?.content ?? "";
-  const globalGenerating = globalSlice?.isGenerating ?? false;
+  const globalGenerating =
+    (globalSlice?.isGenerating ?? false) ||
+    (activeTopicId != null &&
+      getActionState(`task:global-overview:${activeTopicId}`).status === "running");
   const [expandedSnapshotIds, setExpandedSnapshotIds] = useState<number[]>([]);
 
   // Build a Map<snapshotId, SnapshotDelta> for quick lookup in the timeline
@@ -605,10 +609,11 @@ export default function MacroAnalysisPanel({
             </div>
             {snapshots.slice(0, 6).map((snapshot) => {
               const delta = deltaBySnapshotId.get(snapshot.id);
+              const timelineTs = snapshot.window_end || snapshot.created_at;
               return (
                 <div key={snapshot.id} className="rounded-md border border-border/50 bg-surface/60 p-2">
                   <div className="flex items-center justify-between gap-2 text-[10px] text-muted">
-                    <span>{new Date(snapshot.created_at + "Z").toLocaleString()}</span>
+                    <span>{new Date(timelineTs + "Z").toLocaleString()}</span>
                     <span>{getSnapshotStatusLabel(snapshot.snapshot_status)}</span>
                   </div>
                   <div

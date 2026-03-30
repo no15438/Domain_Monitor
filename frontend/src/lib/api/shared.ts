@@ -23,6 +23,23 @@ function emitToast(
   }
 }
 
+async function extractErrorMessage(res: Response): Promise<string | null> {
+  try {
+    const clone = res.clone();
+    const contentType = clone.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const data = await clone.json();
+      if (typeof data?.message === "string" && data.message.trim()) return data.message.trim();
+      if (typeof data?.detail === "string" && data.detail.trim()) return data.detail.trim();
+    }
+    const text = (await clone.text()).trim();
+    if (text) return text.slice(0, 240);
+  } catch {
+    // ignore parse errors
+  }
+  return null;
+}
+
 export async function fetchWithRetry(
   url: string,
   options?: RequestInit,
@@ -55,9 +72,18 @@ export async function safeJson<T>(
   options?: { silent?: boolean },
 ): Promise<T> {
   if (!res.ok) {
+    const errMsg = await extractErrorMessage(res);
     apiWarn(`${res.url} -> HTTP ${res.status}`);
-    if (!options?.silent && res.status >= 500) {
-      emitToast(`Server error (${res.status}) — please try again later`);
+    if (!options?.silent) {
+      if (errMsg) emitToast(errMsg, res.status >= 500 ? "error" : "warn");
+      else if (res.status >= 500) emitToast(`Server error (${res.status}) — please try again later`);
+    }
+    if (fallback && typeof fallback === "object") {
+      const next = { ...(fallback as object) } as Record<string, unknown>;
+      if ("status" in next) next.status = "error";
+      if ("message" in next && errMsg) next.message = errMsg;
+      if ("detail" in next && errMsg) next.detail = errMsg;
+      return next as T;
     }
     return fallback;
   }
@@ -76,6 +102,48 @@ export async function safeJson<T>(
     }
   }
   return data;
+}
+
+type ActionRunnerOptions = {
+  errorMessage?: string;
+};
+
+export function taskActionKey(taskType: string, topicId: number | string | null | undefined): string {
+  return `task:${taskType}:${topicId ?? "all"}`;
+}
+
+export function uiActionKey(scope: string, id: string | number): string {
+  return `ui:${scope}:${id}`;
+}
+
+export async function runWithAction<T>(
+  actionKey: string,
+  task: () => Promise<T>,
+  options?: ActionRunnerOptions,
+): Promise<T> {
+  let store: { beginAction: (key: string) => void; endAction: (key: string, status: "success" | "error", error?: string | null, result?: string | null) => void; } | null = null;
+  try {
+    // Dynamic require avoids circular dependency with store<->api imports.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { useStore } = require("@/stores/useStore");
+    store = useStore.getState();
+    store?.beginAction(actionKey);
+  } catch {
+    store = null;
+  }
+
+  try {
+    const result = await task();
+    store?.endAction(actionKey, "success");
+    return result;
+  } catch (e) {
+    const message =
+      e instanceof Error && e.message
+        ? e.message
+        : options?.errorMessage || "Action failed";
+    store?.endAction(actionKey, "error", message);
+    throw e;
+  }
 }
 
 export { BASE, DEV };

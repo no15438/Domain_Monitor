@@ -21,6 +21,7 @@ import {
   toggleEventKept,
 } from "@/lib/api";
 import { useStore } from "@/stores/useStore";
+import { runWithAction } from "@/lib/api/shared";
 import { effectiveImportance, parseTags } from "@/lib/utils";
 import { IMPORTANCE_THRESHOLD } from "@/lib/constants";
 import { shouldShowTrackingPin, sentimentConfig } from "./contentCardShared";
@@ -42,6 +43,7 @@ export default function EventCard({
 }) {
   const setSelectedEventContext = useStore((s) => s.setSelectedEventContext);
   const setChatOpen = useStore((s) => s.setChatOpen);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
 
   const [curSentiment, setCurSentiment] = useState(event.sentiment);
   const [curImportance, setCurImportance] = useState(event.importance);
@@ -90,24 +92,48 @@ export default function EventCard({
   }
 
   async function handleArchive() {
-    await archiveEvent(event.id);
-    onArchived?.(event.id);
+    if (pendingAction) return;
+    setPendingAction("archive");
+    try {
+      await runWithAction(`ui:event-card:archive:${event.id}`, () => archiveEvent(event.id));
+      onArchived?.(event.id);
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   async function handleRestore() {
-    await restoreEvent(event.id);
-    onRestored?.(event.id);
+    if (pendingAction) return;
+    setPendingAction("restore");
+    try {
+      await runWithAction(`ui:event-card:restore:${event.id}`, () => restoreEvent(event.id));
+      onRestored?.(event.id);
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   async function handleDelete() {
-    await deleteEvent(event.id);
-    onRemoved?.(event.id);
+    if (pendingAction) return;
+    setPendingAction("delete");
+    try {
+      await runWithAction(`ui:event-card:delete:${event.id}`, () => deleteEvent(event.id));
+      onRemoved?.(event.id);
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   async function handleToggleKept() {
+    if (pendingAction) return;
+    setPendingAction("pin");
     const next = !isKept;
     setIsKept(next);
-    await toggleEventKept(event.id, next);
+    try {
+      await runWithAction(`ui:event-card:pin:${event.id}`, () => toggleEventKept(event.id, next));
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   function handleAskAI() {
@@ -307,6 +333,7 @@ export default function EventCard({
           <div className="ml-auto flex items-center gap-1 shrink-0">
             <button
               onClick={handleToggleKept}
+              disabled={!!pendingAction}
               className="p-1 rounded text-muted hover:text-accent transition-colors"
               title={isKept ? "Unpin" : "Pin for tracking"}
             >
@@ -315,6 +342,7 @@ export default function EventCard({
             {!isArchived ? (
               <button
                 onClick={handleArchive}
+                disabled={!!pendingAction}
                 className="p-1 rounded text-[10px] text-muted hover:text-foreground transition-colors"
                 title="Archive event"
               >
@@ -323,6 +351,7 @@ export default function EventCard({
             ) : (
               <button
                 onClick={handleRestore}
+                disabled={!!pendingAction}
                 className="p-1 rounded text-[10px] text-muted hover:text-foreground transition-colors"
                 title="Restore event"
               >
@@ -331,6 +360,7 @@ export default function EventCard({
             )}
             <button
               onClick={handleDelete}
+              disabled={!!pendingAction}
               className="p-1 rounded text-[10px] text-muted hover:text-negative transition-colors"
               title="Delete event"
             >

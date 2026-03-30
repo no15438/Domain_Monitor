@@ -15,6 +15,7 @@ export default function TopicDetailPage() {
   const params = useParams();
   const router = useRouter();
   const topicId = Number(params.id);
+  const hasValidTopicId = Number.isFinite(topicId) && topicId > 0;
 
   const {
     setTopics,
@@ -22,16 +23,27 @@ export default function TopicDetailPage() {
     setActiveTopicId,
     chatOpen,
     hydrateFetchStatus,
+    briefCollapsedByTopic,
+    setBriefCollapsed,
   } = useStore();
 
   const [topic, setTopic] = useState<Topic | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [briefCollapsed, setBriefCollapsed] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const briefCollapsed = briefCollapsedByTopic[topicId] ?? false;
 
   const loadTopicWorkspace = useCallback(async () => {
+    if (!hasValidTopicId) {
+      setTopic(null);
+      setNotFound(true);
+      setError("Invalid topic id.");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
+    setNotFound(false);
     try {
       const [topicsData, kwData] = await Promise.all([
         fetchTopics(),
@@ -41,6 +53,8 @@ export default function TopicDetailPage() {
       setKeywords(kwData.keywords);
       const found = topicsData.topics.find((t) => t.id === topicId);
       if (!found) {
+        setNotFound(true);
+        setError("This topic does not exist or was removed.");
         router.push("/");
         return;
       }
@@ -52,7 +66,7 @@ export default function TopicDetailPage() {
     } finally {
       setLoading(false);
     }
-  }, [hydrateFetchStatus, router, setKeywords, setTopics, topicId]);
+  }, [hasValidTopicId, hydrateFetchStatus, router, setKeywords, setTopics, topicId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,7 +83,15 @@ export default function TopicDetailPage() {
     };
   }, [loadTopicWorkspace, setActiveTopicId, topicId]);
 
-  if (loading || !topic) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="w-6 h-6 text-accent animate-spin" />
+      </div>
+    );
+  }
+
+  if (!topic) {
     if (error) {
       return (
         <div className="flex h-full items-center justify-center px-6">
@@ -77,6 +99,11 @@ export default function TopicDetailPage() {
             <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-important" />
             <h2 className="mb-2 text-base font-semibold">Topic workspace unavailable</h2>
             <p className="mb-4 text-sm text-muted">{error}</p>
+            {notFound && (
+              <p className="mb-3 text-xs text-muted">
+                Redirecting you to the topic list.
+              </p>
+            )}
             <button
               onClick={() => void loadTopicWorkspace()}
               className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
@@ -90,7 +117,7 @@ export default function TopicDetailPage() {
     }
     return (
       <div className="flex items-center justify-center h-full">
-        <Loader2 className="w-6 h-6 text-accent animate-spin" />
+        <p className="text-sm text-muted">Opening topic workspace...</p>
       </div>
     );
   }
@@ -102,7 +129,7 @@ export default function TopicDetailPage() {
         <ResearchBriefPanel
           topic={topic}
           collapsed={briefCollapsed}
-          onToggle={() => setBriefCollapsed((v) => !v)}
+          onToggle={() => setBriefCollapsed(topicId, !briefCollapsed)}
         />
         <EventFeed />
         {chatOpen ? <ChatBot /> : <AnalysisPanel />}

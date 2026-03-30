@@ -50,6 +50,11 @@ export default function AnalysisPanel() {
   const refreshKey = useStore((s) => s.insightRefreshKey);
   const hydrateLiveSummary = useStore((s) => s.hydrateLiveSummary);
   const startLiveSummaryGeneration = useStore((s) => s.startLiveSummaryGeneration);
+  const analysisTabByTopic = useStore((s) => s.analysisTabByTopic);
+  const analysisWindowByTopic = useStore((s) => s.analysisWindowByTopic);
+  const setAnalysisTab = useStore((s) => s.setAnalysisTab);
+  const setAnalysisWindow = useStore((s) => s.setAnalysisWindow);
+  const getActionState = useStore((s) => s.getActionState);
   const liveSlice = useStore((s) =>
     s.activeTopicId != null ? s.liveSummaryByTopic[s.activeTopicId] : undefined
   );
@@ -58,20 +63,34 @@ export default function AnalysisPanel() {
   const aiGeneratedAt = liveSlice?.generatedAt ?? null;
   const isGenerating = liveSlice?.isGenerating ?? false;
 
-  const [activeTab, setActiveTab] = useState<"realtime" | "overview">("realtime");
-  const [window, setWindow] = useState<"24h" | "7d">("24h");
+  const activeTab = activeTopicId != null ? (analysisTabByTopic[activeTopicId] ?? "realtime") : "realtime";
+  const window = activeTopicId != null ? (analysisWindowByTopic[activeTopicId] ?? "24h") : "24h";
   const [stats, setStats] = useState<InsightSummary>(EMPTY_SUMMARY);
   const [insight, setInsight] = useState<TopicInsight>(EMPTY_INSIGHT);
   const [trending, setTrending] = useState<TrendingData | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const liveActionRunning =
+    activeTopicId != null &&
+    getActionState(`task:live-summary:${activeTopicId}`).status === "running";
 
   useEffect(() => {
     if (activeTopicId == null) return;
     let cancelled = false;
+    setAnalysisError(null);
     const hours = window === "7d" ? 168 : 24;
     const days = window === "7d" ? 7 : 3;
-    fetchInsightSummary(activeTopicId, hours).then((d) => { if (!cancelled) setStats(d); }).catch((e) => { if (process.env.NODE_ENV === "development") console.warn("[fetch]", e); });
-    fetchTopicInsight(activeTopicId, window).then((d) => { if (!cancelled) setInsight(d); }).catch((e) => { if (process.env.NODE_ENV === "development") console.warn("[fetch]", e); });
-    fetchTrending(activeTopicId, days).then((d) => { if (!cancelled) setTrending(d); }).catch((e) => { if (process.env.NODE_ENV === "development") console.warn("[fetch]", e); });
+    fetchInsightSummary(activeTopicId, hours).then((d) => { if (!cancelled) setStats(d); }).catch((e) => {
+      if (process.env.NODE_ENV === "development") console.warn("[fetch]", e);
+      if (!cancelled) setAnalysisError("Some analytics data failed to load.");
+    });
+    fetchTopicInsight(activeTopicId, window).then((d) => { if (!cancelled) setInsight(d); }).catch((e) => {
+      if (process.env.NODE_ENV === "development") console.warn("[fetch]", e);
+      if (!cancelled) setAnalysisError("Some analytics data failed to load.");
+    });
+    fetchTrending(activeTopicId, days).then((d) => { if (!cancelled) setTrending(d); }).catch((e) => {
+      if (process.env.NODE_ENV === "development") console.warn("[fetch]", e);
+      if (!cancelled) setAnalysisError("Some analytics data failed to load.");
+    });
     return () => { cancelled = true; };
   }, [activeTopicId, window, refreshKey]);
 
@@ -81,9 +100,9 @@ export default function AnalysisPanel() {
   }, [activeTopicId, hydrateLiveSummary]);
 
   const handleGenerate = useCallback(() => {
-    if (activeTopicId == null || isGenerating) return;
+    if (activeTopicId == null || isGenerating || liveActionRunning) return;
     void startLiveSummaryGeneration(activeTopicId);
-  }, [activeTopicId, isGenerating, startLiveSummaryGeneration]);
+  }, [activeTopicId, isGenerating, liveActionRunning, startLiveSummaryGeneration]);
 
   const sentDist = insight.sentiment_distribution;
   const sentTotal = Object.values(sentDist).reduce((a, b) => a + b, 0) || 1;
@@ -104,6 +123,11 @@ export default function AnalysisPanel() {
     <div className="space-y-5">
       {/* ── AI Analysis ── */}
       <div>
+        {analysisError && (
+          <div className="mb-2 rounded-md border border-important/25 bg-important/10 px-2.5 py-1.5 text-[11px] text-important">
+            {analysisError}
+          </div>
+        )}
         <div className="flex items-center justify-between mb-2">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-accent" />
@@ -118,7 +142,7 @@ export default function AnalysisPanel() {
             )}
             <button
               onClick={handleGenerate}
-              disabled={isGenerating}
+              disabled={isGenerating || liveActionRunning}
               className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-hover transition-colors disabled:opacity-40"
               title={aiText ? "Regenerate" : "Generate AI Analysis"}
             >
@@ -147,7 +171,8 @@ export default function AnalysisPanel() {
         {!aiText && !isGenerating && (
           <button
             onClick={handleGenerate}
-            className="w-full py-4 rounded-lg border border-dashed border-border text-center hover:border-accent/40 hover:bg-accent/5 transition-colors group"
+            disabled={isGenerating || liveActionRunning}
+            className="w-full py-4 rounded-lg border border-dashed border-border text-center hover:border-accent/40 hover:bg-accent/5 transition-colors group disabled:opacity-50"
           >
             <Sparkles className="w-4 h-4 text-muted group-hover:text-accent mx-auto mb-1" />
             <span className="text-[11px] text-muted group-hover:text-foreground">Generate AI Analysis</span>
@@ -165,7 +190,7 @@ export default function AnalysisPanel() {
           {(["24h", "7d"] as const).map((w) => (
             <button
               key={w}
-              onClick={() => setWindow(w)}
+              onClick={() => activeTopicId != null && setAnalysisWindow(activeTopicId, w)}
               className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
                 window === w ? "bg-accent/15 text-accent" : "text-muted hover:text-foreground"
               }`}
@@ -175,6 +200,9 @@ export default function AnalysisPanel() {
           ))}
         </div>
       </div>
+      <p className="text-[10px] text-muted -mt-2">
+        Timeline uses article publish time when available; falls back to fetch time.
+      </p>
 
       <div className="space-y-4">
         {/* ── Alert Signals (only when present) ── */}
@@ -257,12 +285,12 @@ export default function AnalysisPanel() {
   );
 
   return (
-    <div className="flex-[4] min-w-[320px] bg-surface border-l border-border overflow-y-auto flex flex-col relative">
+    <div className="flex-4 min-w-[320px] bg-surface border-l border-border overflow-y-auto flex flex-col relative">
       <div className="p-4 space-y-4 flex-1">
         <div className="rounded-lg border border-border p-1 bg-surface shadow-sm">
           <div className="grid grid-cols-2 gap-1">
             <button
-              onClick={() => setActiveTab("realtime")}
+              onClick={() => activeTopicId != null && setAnalysisTab(activeTopicId, "realtime")}
               className={`px-2 py-1.5 rounded text-[11px] font-semibold transition-colors ${
                 activeTab === "realtime" ? "bg-accent/20 text-accent" : "text-muted hover:text-foreground"
               }`}
@@ -270,7 +298,7 @@ export default function AnalysisPanel() {
               Realtime
             </button>
             <button
-              onClick={() => setActiveTab("overview")}
+              onClick={() => activeTopicId != null && setAnalysisTab(activeTopicId, "overview")}
               className={`px-2 py-1.5 rounded text-[11px] font-semibold transition-colors ${
                 activeTab === "overview" ? "bg-accent/20 text-accent" : "text-muted hover:text-foreground"
               }`}

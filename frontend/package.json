@@ -8,7 +8,8 @@
     "start": "next start",
     "check": "next build",
     "smoke:api-contract": "node scripts/api-contract-smoke.mjs",
-    "smoke:knowledge-copy": "node scripts/knowledge-copy-smoke.mjs"
+    "smoke:knowledge-copy": "node scripts/knowledge-copy-smoke.mjs",
+    "smoke:button-state": "node scripts/button-state-smoke.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

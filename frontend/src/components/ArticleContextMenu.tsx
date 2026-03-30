@@ -21,6 +21,7 @@ import {
   restoreArticle,
 } from "@/lib/api";
 import { useStore } from "@/stores/useStore";
+import { runWithAction } from "@/lib/api/shared";
 
 const SENTIMENTS = ["positive", "neutral", "negative"] as const;
 const IMPORTANCE_PRESETS = [3, 5, 7, 9] as const;
@@ -67,6 +68,7 @@ export default function ArticleContextMenu({
 }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ x, y });
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
   const isArchived = article.status === "archived";
   const addToast = useStore((s) => s.addToast);
 
@@ -93,8 +95,43 @@ export default function ArticleContextMenu({
   );
 
   useEffect(() => {
+    const focusFirst = () => {
+      const first = menuRef.current?.querySelector<HTMLButtonElement>('button[role="menuitem"]');
+      first?.focus();
+    };
+    const timer = setTimeout(focusFirst, 0);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      const items = Array.from(
+        menuRef.current?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [],
+      );
+      if (!items.length) return;
+      const current = document.activeElement as HTMLButtonElement | null;
+      const currentIndex = Math.max(0, items.indexOf(current || items[0]));
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        items[(currentIndex + 1) % items.length]?.focus();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        items[(currentIndex - 1 + items.length) % items.length]?.focus();
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        items[0]?.focus();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        items[items.length - 1]?.focus();
+      } else if ((e.key === "Enter" || e.key === " ") && current && items.includes(current)) {
+        e.preventDefault();
+        current.click();
+      }
     };
     document.addEventListener("mousedown", handleClickOutside);
     document.addEventListener("keydown", handleKey);
@@ -105,50 +142,86 @@ export default function ArticleContextMenu({
   }, [handleClickOutside, onClose]);
 
   const handleSentiment = async (s: typeof SENTIMENTS[number]) => {
+    if (pendingAction) return;
+    setPendingAction("sentiment");
     onSentimentChange(s);
-    await patchArticle(article.id, { sentiment: s });
+    try {
+      await runWithAction(`ui:article-menu:sentiment:${article.id}`, () => patchArticle(article.id, { sentiment: s }));
+    } finally {
+      setPendingAction(null);
+    }
   };
 
   const handleImportance = async (v: number) => {
+    if (pendingAction) return;
+    setPendingAction("importance");
     onImportanceChange(v);
-    await patchArticle(article.id, { importance: v });
+    try {
+      await runWithAction(`ui:article-menu:importance:${article.id}`, () => patchArticle(article.id, { importance: v }));
+    } finally {
+      setPendingAction(null);
+    }
   };
 
   const handleToggleKept = async () => {
+    if (pendingAction) return;
+    setPendingAction("pin");
     const next = !isKept;
     onKeptChange(next);
-    const ok = await toggleArticleKept(article.id, next);
-    if (!ok) onKeptChange(!next);
+    try {
+      const ok = await runWithAction(`ui:article-menu:pin:${article.id}`, () => toggleArticleKept(article.id, next));
+      if (!ok) onKeptChange(!next);
+    } finally {
+      setPendingAction(null);
+    }
   };
 
   const handleArchive = async () => {
-    const ok = await archiveArticle(article.id);
-    if (ok) {
-      onArchived();
-    } else {
-      addToast("Failed to archive article", "error");
+    if (pendingAction) return;
+    setPendingAction("archive");
+    try {
+      const ok = await runWithAction(`ui:article-menu:archive:${article.id}`, () => archiveArticle(article.id));
+      if (ok) {
+        onArchived();
+      } else {
+        addToast("Failed to archive article", "error");
+      }
+      onClose();
+    } finally {
+      setPendingAction(null);
     }
-    onClose();
   };
 
   const handleRestore = async () => {
-    const ok = await restoreArticle(article.id);
-    if (ok) {
-      onRestored?.();
-    } else {
-      addToast("Failed to restore article", "error");
+    if (pendingAction) return;
+    setPendingAction("restore");
+    try {
+      const ok = await runWithAction(`ui:article-menu:restore:${article.id}`, () => restoreArticle(article.id));
+      if (ok) {
+        onRestored?.();
+      } else {
+        addToast("Failed to restore article", "error");
+      }
+      onClose();
+    } finally {
+      setPendingAction(null);
     }
-    onClose();
   };
 
   const handleDelete = async () => {
-    const ok = await deleteArticle(article.id);
-    if (ok) {
-      onDeleted();
-    } else {
-      addToast("Failed to delete article", "error");
+    if (pendingAction) return;
+    setPendingAction("delete");
+    try {
+      const ok = await runWithAction(`ui:article-menu:delete:${article.id}`, () => deleteArticle(article.id));
+      if (ok) {
+        onDeleted();
+      } else {
+        addToast("Failed to delete article", "error");
+      }
+      onClose();
+    } finally {
+      setPendingAction(null);
     }
-    onClose();
   };
 
   return createPortal(
@@ -175,6 +248,7 @@ export default function ArticleContextMenu({
               key={s}
               role="menuitem"
               aria-pressed={active}
+              disabled={!!pendingAction}
               onClick={() => handleSentiment(s)}
               className={`w-full flex items-center gap-2 px-3 py-1.5 hover:bg-surface-hover transition-colors ${active ? meta.color + " font-semibold" : "text-foreground"}`}
             >
@@ -198,6 +272,7 @@ export default function ArticleContextMenu({
               role="menuitem"
               aria-pressed={importance === v}
               aria-label={`Set importance to ${v}`}
+              disabled={!!pendingAction}
               onClick={() => handleImportance(v)}
               className={`w-8 h-6 rounded text-[10px] font-bold transition-colors ${
                 importance === v
@@ -218,6 +293,7 @@ export default function ArticleContextMenu({
         <button
           role="menuitem"
           onClick={handleToggleKept}
+          disabled={!!pendingAction}
           className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-surface-hover transition-colors text-foreground"
         >
           {isKept ? (
@@ -240,6 +316,7 @@ export default function ArticleContextMenu({
           <button
             role="menuitem"
             onClick={handleRestore}
+            disabled={!!pendingAction}
             className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-surface-hover transition-colors text-foreground"
           >
             <ArchiveRestore className="w-3.5 h-3.5" aria-hidden="true" />
@@ -249,6 +326,7 @@ export default function ArticleContextMenu({
           <button
             role="menuitem"
             onClick={handleArchive}
+            disabled={!!pendingAction}
             className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-surface-hover transition-colors text-foreground"
           >
             <Archive className="w-3.5 h-3.5" aria-hidden="true" />
@@ -260,6 +338,7 @@ export default function ArticleContextMenu({
         <button
           role="menuitem"
           onClick={handleDelete}
+          disabled={!!pendingAction}
           className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-negative/10 transition-colors text-negative"
         >
           <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />

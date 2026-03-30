@@ -127,13 +127,30 @@ export async function postGlobalOverviewGenerate(
 
 export async function fetchGlobalOverviewStatus(
   topicId: number,
-): Promise<{ generating: boolean }> {
+): Promise<{
+  generating: boolean;
+  status?: string;
+  error?: string | null;
+  result_summary?: string | null;
+  finished_at?: string | null;
+}> {
   const ts = Date.now();
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${BASE}/api/topics/${topicId}/synthesis/global-overview/status?ts=${ts}`,
     { cache: "no-store" },
   );
-  return safeJson(res, { generating: false }, undefined, { silent: true });
+  return safeJson(
+    res,
+    {
+      generating: false,
+      status: "idle",
+      error: null,
+      result_summary: null,
+      finished_at: null,
+    },
+    undefined,
+    { silent: true },
+  );
 }
 
 export async function postEvolutionReportGenerate(
@@ -148,13 +165,30 @@ export async function postEvolutionReportGenerate(
 
 export async function fetchEvolutionReportStatus(
   topicId: number,
-): Promise<{ generating: boolean }> {
+): Promise<{
+  generating: boolean;
+  status?: string;
+  error?: string | null;
+  result_summary?: string | null;
+  finished_at?: string | null;
+}> {
   const ts = Date.now();
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${BASE}/api/topics/${topicId}/synthesis/evolution-report/status?ts=${ts}`,
     { cache: "no-store" },
   );
-  return safeJson(res, { generating: false }, undefined, { silent: true });
+  return safeJson(
+    res,
+    {
+      generating: false,
+      status: "idle",
+      error: null,
+      result_summary: null,
+      finished_at: null,
+    },
+    undefined,
+    { silent: true },
+  );
 }
 
 export async function fetchCachedSummary(
@@ -180,13 +214,30 @@ export async function postLiveSummaryGenerate(
 
 export async function fetchLiveSummaryStatus(
   topicId: number,
-): Promise<{ generating: boolean }> {
+): Promise<{
+  generating: boolean;
+  status?: string;
+  error?: string | null;
+  result_summary?: string | null;
+  finished_at?: string | null;
+}> {
   const ts = Date.now();
-  const res = await fetch(
+  const res = await fetchWithRetry(
     `${BASE}/api/topics/${topicId}/ai-summary/status?ts=${ts}`,
     { cache: "no-store" },
   );
-  return safeJson(res, { generating: false }, undefined, { silent: true });
+  return safeJson(
+    res,
+    {
+      generating: false,
+      status: "idle",
+      error: null,
+      result_summary: null,
+      finished_at: null,
+    },
+    undefined,
+    { silent: true },
+  );
 }
 
 export async function fetchInsightSummary(
