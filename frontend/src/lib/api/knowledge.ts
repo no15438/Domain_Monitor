@@ -2,6 +2,7 @@ import { BASE, fetchWithRetry, safeJson } from "./shared";
 import type {
   CachedSummary,
   Claim,
+  EventClaimSummary,
   EventRecord,
   EvidenceSet,
   InsightSummary,
@@ -230,4 +231,31 @@ export async function fetchTopicInsight(
     },
     ["article_count", "sentiment_distribution"],
   );
+}
+
+/** Fetch claims associated with a specific event (via evidence_sets). */
+export async function fetchEventClaims(
+  eventId: string,
+): Promise<EventClaimSummary[]> {
+  const res = await fetch(`${BASE}/api/events/${eventId}/claims`);
+  return safeJson(res, { claims: [] }).then(
+    (data) => (data as { claims: EventClaimSummary[] }).claims ?? [],
+  );
+}
+
+/** Update the status of a claim (active | rejected | superseded). */
+export async function updateClaimStatus(
+  claimId: string,
+  status: string,
+): Promise<void> {
+  await fetch(`${BASE}/api/claims/${claimId}/status`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+}
+
+/** Permanently delete a claim. */
+export async function deleteClaim(claimId: string): Promise<void> {
+  await fetch(`${BASE}/api/claims/${claimId}`, { method: "DELETE" });
 }

@@ -1,20 +1,68 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, Loader2, Plus, Radar, RefreshCw, X } from "lucide-react";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  rectSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import ThemeToggle from "@/components/ThemeToggle";
 import TopicCard from "@/components/TopicCard";
 import {
   fetchTopicsOverview,
   fetchArchivedTopicsOverview,
   createTopic,
+  reorderTopics,
   type TopicOverview,
 } from "@/lib/api";
 import { useStore } from "@/stores/useStore";
 import { TOPIC_COLORS } from "@/lib/constants";
 
 const COLORS = TOPIC_COLORS;
+
+// ── Sortable topic card wrapper ───────────────────────────────────────────────
+function SortableTopicCard(props: React.ComponentProps<typeof TopicCard>) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: props.topic.id });
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : undefined,
+    opacity: isDragging ? 0.5 : 1,
+    position: "relative",
+  };
+
+  return (
+    <div ref={setNodeRef} style={style}>
+      <TopicCard
+        {...props}
+        dragHandleListeners={listeners}
+        dragHandleAttributes={attributes}
+        isDragging={isDragging}
+      />
+    </div>
+  );
+}
 
 export default function Home() {
   const [topics, setTopics] = useState<TopicOverview[]>([]);
@@ -27,6 +75,30 @@ export default function Home() {
   const [newColor, setNewColor] = useState(COLORS[0]);
   const addToast = useStore((s) => s.addToast);
 
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor),
+  );
+  const prevTopicsRef = useRef<TopicOverview[]>([]);
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    setTopics((prev) => {
+      const oldIndex = prev.findIndex((t) => t.id === active.id);
+      const newIndex = prev.findIndex((t) => t.id === over.id);
+      if (oldIndex === -1 || newIndex === -1) return prev;
+      const reordered = arrayMove(prev, oldIndex, newIndex);
+      // Persist asynchronously; roll back on error
+      reorderTopics(reordered.map((t) => t.id)).catch(() => {
+        setTopics(prevTopicsRef.current);
+      });
+      prevTopicsRef.current = reordered;
+      return reordered;
+    });
+  }
+
   const loadTopics = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
@@ -36,6 +108,7 @@ export default function Home() {
         fetchArchivedTopicsOverview(24),
       ]);
       setTopics(data.topics);
+      prevTopicsRef.current = data.topics;
       setArchivedTopics(archived.topics);
     } catch (e) {
       if (process.env.NODE_ENV === "development") console.warn("[fetch]", e);
@@ -272,27 +345,37 @@ export default function Home() {
             </p>
           )}
 
-          {/* Topic cards grid */}
+          {/* Topic cards grid — sortable */}
           {!loading && !loadError && topics.length > 0 && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {topics.map((topic, i) => (
-                <motion.div
-                  key={topic.id}
-                  initial={{ opacity: 0, y: 20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: i * 0.05 }}
-                  layout
-                >
-                  <TopicCard
-                    topic={topic}
-                    variant="active"
-                    onUpdated={handleUpdated}
-                    onDeleted={handleDeleted}
-                    onArchived={handleArchived}
-                  />
-                </motion.div>
-              ))}
-            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={topics.map((t) => t.id)}
+                strategy={rectSortingStrategy}
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {topics.map((topic, i) => (
+                    <motion.div
+                      key={topic.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.05 }}
+                    >
+                      <SortableTopicCard
+                        topic={topic}
+                        variant="active"
+                        onUpdated={handleUpdated}
+                        onDeleted={handleDeleted}
+                        onArchived={handleArchived}
+                      />
+                    </motion.div>
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
 
           {!loading && !loadError && archivedTopics.length > 0 && (

@@ -6,7 +6,6 @@ import {
   Loader2,
   Inbox,
   LayoutList,
-  Layers,
   TrendingUp,
   TrendingDown,
   Minus,
@@ -16,14 +15,14 @@ import {
   Archive,
   ChevronDown,
   ChevronUp,
+  Filter,
+  X,
 } from "lucide-react";
 import { useStore } from "@/stores/useStore";
-import { fetchArticles, fetchEvents, createSSEConnection } from "@/lib/api";
-import EventCard from "./EventCard";
+import { fetchArticles, createSSEConnection } from "@/lib/api";
 import NewsCard from "./NewsCard";
-import type { Article, EventCluster } from "@/lib/api";
+import type { Article } from "@/lib/api";
 
-type ViewMode = "events" | "all";
 type SentimentFilter = "all" | "positive" | "neutral" | "negative";
 type SortMode = "relevance" | "latest";
 
@@ -46,146 +45,99 @@ export default function EventFeed() {
     setArticles,
     prependArticles,
     activeTopicId,
-    highlightedEventId,
     refreshInsights,
-    insightRefreshKey,
+    selectedKnowledgeEventId,
+    selectedKnowledgeEventTitle,
+    setSelectedKnowledgeEvent,
   } = useStore();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  const [viewMode, setViewMode] = useState<ViewMode>("events");
   const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("relevance");
 
-  // Event clusters state (Events tab)
-  const [events, setEvents] = useState<EventCluster[]>([]);
-  const [newEventIds, setNewEventIds] = useState<Set<string>>(new Set());
-
-  // Articles state (All Articles tab)
   const [newArticleIds, setNewArticleIds] = useState<Set<string>>(new Set());
 
   // Archived fold
-  const [archivedEvents, setArchivedEvents] = useState<EventCluster[]>([]);
   const [archivedArticles, setArchivedArticles] = useState<Article[]>([]);
   const [archivedCount, setArchivedCount] = useState(0);
   const [showArchived, setShowArchived] = useState(false);
 
-  // Fetch active items
+  // Fetch active articles — re-fetch when event filter changes
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    if (viewMode === "events") {
-      fetchEvents(activeTopicId, 50, 0, sortMode, "active")
-        .then((data) => { if (!cancelled) setEvents(data.events); })
-        .catch((e) => {
-          if (process.env.NODE_ENV === "development") console.warn("[fetch events]", e);
-          if (!cancelled) setError("Failed to load events. Please retry.");
-        })
-        .finally(() => { if (!cancelled) setLoading(false); });
-    } else {
-      fetchArticles(50, 0, activeTopicId, sortMode, "active")
-        .then((data) => { if (!cancelled) setArticles(data.articles); })
-        .catch((e) => {
-          if (process.env.NODE_ENV === "development") console.warn("[fetch articles]", e);
-          if (!cancelled) setError("Failed to load articles. Please retry.");
-        })
-        .finally(() => { if (!cancelled) setLoading(false); });
-    }
+    fetchArticles(50, 0, activeTopicId, sortMode, "active", selectedKnowledgeEventId)
+      .then((data) => { if (!cancelled) setArticles(data.articles); })
+      .catch((e) => {
+        if (process.env.NODE_ENV === "development") console.warn("[fetch articles]", e);
+        if (!cancelled) setError("Failed to load articles. Please retry.");
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [activeTopicId, viewMode, sortMode, setArticles, insightRefreshKey, reloadKey]);
+  }, [activeTopicId, sortMode, reloadKey, selectedKnowledgeEventId, setArticles]);
 
   // Fetch archived count
   useEffect(() => {
     let cancelled = false;
-    if (viewMode === "events") {
-      fetchEvents(activeTopicId, 1, 0, sortMode, "archived")
-        .then((data) => { if (!cancelled) setArchivedCount(data.total); })
-        .catch(() => {});
-    } else {
-      fetchArticles(1, 0, activeTopicId, sortMode, "archived")
-        .then((data) => { if (!cancelled) setArchivedCount(data.total); })
-        .catch(() => {});
-    }
+    fetchArticles(1, 0, activeTopicId, sortMode, "archived", selectedKnowledgeEventId)
+      .then((data) => { if (!cancelled) setArchivedCount(data.total); })
+      .catch(() => {});
     return () => { cancelled = true; };
-  }, [activeTopicId, viewMode, sortMode, insightRefreshKey]);
+  }, [activeTopicId, sortMode, selectedKnowledgeEventId]);
 
   // Load archived items when expanded
   useEffect(() => {
     if (!showArchived) return;
     let cancelled = false;
-    if (viewMode === "events") {
-      fetchEvents(activeTopicId, 50, 0, sortMode, "archived")
-        .then((data) => { if (!cancelled) setArchivedEvents(data.events); })
-        .catch(() => {});
-    } else {
-      fetchArticles(50, 0, activeTopicId, sortMode, "archived")
-        .then((data) => { if (!cancelled) setArchivedArticles(data.articles); })
-        .catch(() => {});
-    }
+    fetchArticles(50, 0, activeTopicId, sortMode, "archived", selectedKnowledgeEventId)
+      .then((data) => { if (!cancelled) setArchivedArticles(data.articles); })
+      .catch(() => {});
     return () => { cancelled = true; };
-  }, [showArchived, activeTopicId, viewMode, sortMode, insightRefreshKey]);
+  }, [showArchived, activeTopicId, sortMode, selectedKnowledgeEventId]);
 
-  // SSE: new articles arrive → refresh events list (conservative: full reload)
+  // SSE: structured delta → update articles store + signal new events for evolution
   useEffect(() => {
+    // Don't prepend SSE articles when viewing a filtered event — avoids stale data appearing
+    if (selectedKnowledgeEventId) return;
+
     let alive = true;
-    const sse = createSSEConnection((incoming) => {
+    const sse = createSSEConnection((delta) => {
       if (!alive) return;
+
+      const { articles: incoming, new_event_ids } = delta;
+
       const filtered =
         activeTopicId != null
           ? incoming.filter((a) => a.topic_id === activeTopicId)
           : incoming;
-      if (filtered.length === 0) return;
 
-      // Always update the articles store (used by All Articles tab)
-      const ids = filtered.map((a) => a.id);
-      setNewArticleIds((prev) => {
-        const next = new Set(prev);
-        ids.forEach((id) => next.add(id));
-        return next;
-      });
-      prependArticles(filtered);
-
-      // For Events tab: trigger a soft reload so new events_v2 entries appear
-      if (viewMode === "events") {
-        setReloadKey((k) => k + 1);
+      if (filtered.length > 0) {
+        const articleIds = filtered.map((a) => a.id);
+        setNewArticleIds((prev) => {
+          const next = new Set(prev);
+          articleIds.forEach((id) => next.add(id));
+          return next;
+        });
+        prependArticles(filtered);
+        setTimeout(() => {
+          if (!alive) return;
+          setNewArticleIds((prev) => {
+            const next = new Set(prev);
+            articleIds.forEach((id) => next.delete(id));
+            return next;
+          });
+        }, 10_000);
       }
 
       refreshInsights();
-
-      setTimeout(() => {
-        if (!alive) return;
-        setNewArticleIds((prev) => {
-          const next = new Set(prev);
-          ids.forEach((id) => next.delete(id));
-          return next;
-        });
-      }, 10_000);
     });
     return () => { alive = false; sse.close(); };
-  }, [activeTopicId, prependArticles, viewMode, refreshInsights]);
-
-  function handleEventRemoved(id: string) {
-    setEvents((prev) => prev.filter((e) => e.id !== id));
-    setArchivedEvents((prev) => prev.filter((e) => e.id !== id));
-    setArchivedCount((c) => Math.max(0, c - 1));
-    refreshInsights();
-  }
-
-  function handleEventArchived(id: string) {
-    setEvents((prev) => prev.filter((e) => e.id !== id));
-    setArchivedCount((c) => c + 1);
-    refreshInsights();
-  }
-
-  function handleEventRestored(id: string) {
-    setArchivedEvents((prev) => prev.filter((e) => e.id !== id));
-    setArchivedCount((c) => Math.max(0, c - 1));
-    refreshInsights();
-  }
+  }, [activeTopicId, prependArticles, refreshInsights, selectedKnowledgeEventId]);
 
   function handleArticleRemoved(id: string) {
     setArticles(articles.filter((a) => a.id !== id));
@@ -208,25 +160,19 @@ export default function EventFeed() {
 
   // ── Filtering / counting ────────────────────────────────────────────────────
 
-  const filteredEvents = useMemo(() => {
-    if (sentimentFilter === "all") return events;
-    return events.filter((e) => e.sentiment === sentimentFilter);
-  }, [events, sentimentFilter]);
-
   const filteredArticles = useMemo(() => {
     if (sentimentFilter === "all") return articles;
     return articles.filter((a) => a.sentiment === sentimentFilter);
   }, [articles, sentimentFilter]);
 
   const sentimentCounts = useMemo(() => {
-    const raw = viewMode === "events" ? events : articles;
-    const counts = { all: raw.length, positive: 0, neutral: 0, negative: 0 };
-    for (const item of raw) {
+    const counts = { all: articles.length, positive: 0, neutral: 0, negative: 0 };
+    for (const item of articles) {
       const s = item.sentiment as SentimentFilter;
       if (s in counts) counts[s]++;
     }
     return counts;
-  }, [viewMode, events, articles]);
+  }, [articles]);
 
   // ── Render states ───────────────────────────────────────────────────────────
 
@@ -256,50 +202,59 @@ export default function EventFeed() {
     );
   }
 
-  const activeCount = viewMode === "events" ? events.length : articles.length;
-  if (activeCount === 0 && archivedCount === 0) {
+  if (articles.length === 0 && archivedCount === 0) {
     return (
       <div className="flex-3 min-w-[260px] flex flex-col items-center justify-center text-muted gap-3 border-r border-border">
         <Inbox className="w-12 h-12" />
-        <p className="text-sm">No monitoring items yet.</p>
-        <p className="text-xs">
-          Add keywords in Research Setup, then click &quot;Fetch Now&quot; to start building this topic workspace.
-        </p>
+        {selectedKnowledgeEventId ? (
+          <>
+            <p className="text-sm">No articles found for this event.</p>
+            <button
+              onClick={() => setSelectedKnowledgeEvent(null)}
+              className="text-xs text-accent hover:underline"
+            >
+              Clear filter
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-sm">No monitoring items yet.</p>
+            <p className="text-xs text-center">
+              Add keywords in Research Setup, then click &quot;Fetch Now&quot; to start building this topic workspace.
+            </p>
+          </>
+        )}
       </div>
     );
   }
 
-  const archivedItemsToShow =
-    viewMode === "events" ? archivedEvents : archivedArticles;
-
   return (
     <div className="flex-3 min-w-[260px] flex flex-col overflow-hidden border-r border-border">
+      {/* Event filter banner */}
+      {selectedKnowledgeEventId && (
+        <div className="px-4 py-2 bg-accent/8 border-b border-accent/20 flex items-center gap-2">
+          <Filter className="w-3 h-3 text-accent shrink-0" />
+          <span className="text-[11px] text-accent flex-1 line-clamp-1 font-medium">
+            {selectedKnowledgeEventTitle ?? "Event filter active"}
+          </span>
+          <button
+            onClick={() => setSelectedKnowledgeEvent(null)}
+            className="text-accent/70 hover:text-accent transition-colors"
+            title="Clear event filter"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="px-4 py-2 border-b border-border space-y-2">
-        {/* View mode */}
+        {/* View label + sort */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setViewMode("events")}
-            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
-              viewMode === "events"
-                ? "bg-accent/15 text-accent"
-                : "text-muted hover:text-foreground hover:bg-surface-hover"
-            }`}
-          >
-            <Layers className="w-3 h-3" />
-            Events
-          </button>
-          <button
-            onClick={() => setViewMode("all")}
-            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
-              viewMode === "all"
-                ? "bg-accent/15 text-accent"
-                : "text-muted hover:text-foreground hover:bg-surface-hover"
-            }`}
-          >
+          <div className="flex items-center gap-1 text-[11px] font-medium text-muted">
             <LayoutList className="w-3 h-3" />
-            All Articles
-          </button>
+            <span>News</span>
+          </div>
 
           {/* Sort toggle */}
           <div className="ml-auto flex items-center gap-1">
@@ -356,39 +311,20 @@ export default function EventFeed() {
 
       {/* Feed */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {viewMode === "events" ? (
-          filteredEvents.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-muted">
-              <p className="text-xs">No {sentimentFilter !== "all" ? sentimentFilter : ""} events found.</p>
-            </div>
-          ) : (
-            filteredEvents.map((ev) => (
-              <EventCard
-                key={ev.id}
-                event={ev}
-                isNew={newEventIds.has(ev.id)}
-                isHighlighted={highlightedEventId === ev.id}
-                onRemoved={handleEventRemoved}
-                onArchived={handleEventArchived}
-              />
-            ))
-          )
+        {filteredArticles.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-muted">
+            <p className="text-xs">No {sentimentFilter !== "all" ? sentimentFilter : ""} articles found.</p>
+          </div>
         ) : (
-          filteredArticles.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-muted">
-              <p className="text-xs">No {sentimentFilter !== "all" ? sentimentFilter : ""} articles found.</p>
-            </div>
-          ) : (
-            filteredArticles.map((item) => (
-              <NewsCard
-                key={item.id}
-                article={item}
-                isNew={newArticleIds.has(item.id)}
-                onRemoved={handleArticleRemoved}
-                onArchived={handleArticleArchived}
-              />
-            ))
-          )
+          filteredArticles.map((item) => (
+            <NewsCard
+              key={item.id}
+              article={item}
+              isNew={newArticleIds.has(item.id)}
+              onRemoved={handleArticleRemoved}
+              onArchived={handleArticleArchived}
+            />
+          ))
         )}
 
         {/* Archived fold */}
@@ -407,23 +343,14 @@ export default function EventFeed() {
 
             {showArchived && (
               <div className="space-y-3 mt-2">
-                {viewMode === "events"
-                  ? archivedEvents.map((ev) => (
-                      <EventCard
-                        key={ev.id}
-                        event={ev}
-                        onRemoved={handleEventRemoved}
-                        onRestored={handleEventRestored}
-                      />
-                    ))
-                  : archivedArticles.map((item) => (
-                      <NewsCard
-                        key={item.id}
-                        article={item}
-                        onRemoved={handleArticleRemoved}
-                        onRestored={handleArticleRestored}
-                      />
-                    ))}
+                {archivedArticles.map((item) => (
+                  <NewsCard
+                    key={item.id}
+                    article={item}
+                    onRemoved={handleArticleRemoved}
+                    onRestored={handleArticleRestored}
+                  />
+                ))}
               </div>
             )}
           </div>

@@ -15,6 +15,8 @@ export default function ChatBot() {
     clearChat,
     selectedArticle,
     setSelectedArticle,
+    selectedEventContext,
+    setSelectedEventContext,
     isChatLoading,
     setChatLoading,
     chatOpen,
@@ -39,28 +41,53 @@ export default function ChatBot() {
   }, [chatMessages]);
 
   useEffect(() => {
-    if (selectedArticle) {
+    if (selectedArticle || selectedEventContext) {
       inputRef.current?.focus();
     }
-  }, [selectedArticle]);
+  }, [selectedArticle, selectedEventContext]);
+
+  // Derive context string from whichever source is set
+  const hasContext = !!(selectedArticle || selectedEventContext);
+  const contextTitle = selectedEventContext?.title ?? selectedArticle?.title ?? "";
+
+  function buildContextString(): string | undefined {
+    if (selectedEventContext) {
+      const ec = selectedEventContext;
+      return [
+        `[Event] ${ec.title}`,
+        ec.canonical_source ? `Source: ${ec.canonical_source}` : "",
+        ec.canonical_url ? `URL: ${ec.canonical_url}` : "",
+        ec.first_seen_at ? `First seen: ${ec.first_seen_at}` : "",
+        ec.last_seen_at && ec.last_seen_at !== ec.first_seen_at ? `Last seen: ${ec.last_seen_at}` : "",
+        `Sentiment: ${ec.sentiment} | Importance: ${ec.importance} | Sources covering: ${ec.source_count}`,
+        ec.tags ? `Tags: ${ec.tags}` : "",
+        ec.canonical_key_entities ? `Key Entities: ${ec.canonical_key_entities}` : "",
+        ec.canonical_topic_analysis ? `AI Analysis: ${ec.canonical_topic_analysis}` : "",
+        `Summary: ${ec.summary}`,
+        ec.canonical_content ? `Content: ${ec.canonical_content.slice(0, 1200)}` : "",
+      ].filter(Boolean).join("\n");
+    }
+    if (selectedArticle) {
+      return [
+        `Title: ${selectedArticle.title}`,
+        `Source: ${selectedArticle.source} | URL: ${selectedArticle.url}`,
+        `Published: ${selectedArticle.published_at}`,
+        `Sentiment: ${selectedArticle.sentiment} | Importance: ${selectedArticle.importance}`,
+        selectedArticle.tags ? `Tags: ${selectedArticle.tags}` : "",
+        selectedArticle.key_entities ? `Key Entities: ${selectedArticle.key_entities}` : "",
+        selectedArticle.topic_analysis ? `AI Analysis: ${selectedArticle.topic_analysis}` : "",
+        `Summary: ${selectedArticle.summary}`,
+        `Content: ${(selectedArticle.content ?? "").slice(0, 1200)}`,
+      ].filter(Boolean).join("\n");
+    }
+    return undefined;
+  }
 
   async function handleSend() {
     const msg = input.trim();
     if (!msg || isChatLoading) return;
 
-    const ctx = selectedArticle
-      ? [
-          `Title: ${selectedArticle.title}`,
-          `Source: ${selectedArticle.source} | URL: ${selectedArticle.url}`,
-          `Published: ${selectedArticle.published_at}`,
-          `Sentiment: ${selectedArticle.sentiment} | Importance: ${selectedArticle.importance}`,
-          selectedArticle.tags ? `Tags: ${selectedArticle.tags}` : "",
-          selectedArticle.key_entities ? `Key Entities: ${selectedArticle.key_entities}` : "",
-          selectedArticle.topic_analysis ? `AI Analysis: ${selectedArticle.topic_analysis}` : "",
-          `Summary: ${selectedArticle.summary}`,
-          `Content: ${(selectedArticle.content ?? "").slice(0, 1200)}`,
-        ].filter(Boolean).join("\n")
-      : undefined;
+    const ctx = buildContextString();
 
     // Snapshot history before adding new user message (max 10 turns = 20 messages)
     const historyToSend = chatMessages.slice(-20).map((m) => ({
@@ -97,6 +124,7 @@ export default function ChatBot() {
       setChatLoading(false);
       setChatStatus(null);
       setSelectedArticle(null);
+      setSelectedEventContext(null);
     }
   }
 
@@ -129,9 +157,9 @@ export default function ChatBot() {
         </div>
       </div>
 
-      {/* Article context banner */}
+      {/* Context banner — shown for both article and event contexts */}
       <AnimatePresence>
-        {selectedArticle && (
+        {hasContext && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
@@ -140,10 +168,13 @@ export default function ChatBot() {
           >
             <div className="flex items-start justify-between gap-2">
               <p className="text-[11px] text-accent-hover line-clamp-2">
-                Context: {selectedArticle.title}
+                {selectedEventContext ? "Event context: " : "Context: "}{contextTitle}
               </p>
               <button
-                onClick={() => setSelectedArticle(null)}
+                onClick={() => {
+                  setSelectedArticle(null);
+                  setSelectedEventContext(null);
+                }}
                 className="text-muted hover:text-foreground shrink-0"
               >
                 <X className="w-3 h-3" />

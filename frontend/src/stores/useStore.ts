@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { Article, Keyword, Topic } from "@/lib/api";
+import type { Article, Keyword, Topic, EventCluster } from "@/lib/api";
 import {
   fetchGlobalOverview,
   fetchGlobalOverviewStatus,
@@ -64,6 +64,25 @@ function stopFetchPoll(key: string) {
   }
 }
 
+/** Native event context for chatbot — avoids faking an Article object. */
+export interface EventChatContext {
+  event_id: string;
+  title: string;
+  summary: string;
+  canonical_source: string | null;
+  canonical_url: string | null;
+  source_count: number;
+  sentiment: string;
+  importance: number;
+  tags: string;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  /** Canonical article full text if available (loaded on-demand via fetchEventDetail) */
+  canonical_content?: string | null;
+  canonical_key_entities?: string | null;
+  canonical_topic_analysis?: string | null;
+}
+
 interface AppState {
   topics: Topic[];
   activeTopicId: number | null;
@@ -72,6 +91,12 @@ interface AppState {
   /** Per-topic chat history keyed by String(topicId). Persisted to localStorage. */
   chatMessagesByTopic: Record<string, ChatMessage[]>;
   selectedArticle: Article | null;
+  /** Native event chat context — preferred over selectedArticle for event cards. */
+  selectedEventContext: EventChatContext | null;
+  /** Currently selected event in the Knowledge panel — drives middle feed filtering. */
+  selectedKnowledgeEventId: string | null;
+  /** Title of the selected knowledge event (for display in filter banner). */
+  selectedKnowledgeEventTitle: string | null;
   fetchingTopicId: number | null;
   isChatLoading: boolean;
   chatOpen: boolean;
@@ -87,6 +112,8 @@ interface AppState {
   prependArticles: (articles: Article[]) => void;
   setKeywords: (keywords: Keyword[]) => void;
   setSelectedArticle: (article: Article | null) => void;
+  setSelectedEventContext: (ctx: EventChatContext | null) => void;
+  setSelectedKnowledgeEvent: (id: string | null, title?: string | null) => void;
   setFetchingTopic: (id: number | null) => void;
   setChatLoading: (v: boolean) => void;
   setChatOpen: (v: boolean) => void;
@@ -115,6 +142,9 @@ export const useStore = create<AppState>()(
   keywords: [],
   chatMessagesByTopic: {},
   selectedArticle: null,
+  selectedEventContext: null,
+  selectedKnowledgeEventId: null,
+  selectedKnowledgeEventTitle: null,
   fetchingTopicId: null,
   isChatLoading: false,
   chatOpen: false,
@@ -390,7 +420,7 @@ export const useStore = create<AppState>()(
       stopLiveSummaryPoll(prev);
       stopFetchPoll(String(prev));
     }
-    set({ activeTopicId: id, highlightedEventId: null });
+    set({ activeTopicId: id, highlightedEventId: null, selectedKnowledgeEventId: null, selectedKnowledgeEventTitle: null });
   },
   setArticles: (articles) => set({ articles }),
   prependArticles: (newArticles) =>
@@ -400,7 +430,9 @@ export const useStore = create<AppState>()(
       return { articles: [...unique, ...s.articles] };
     }),
   setKeywords: (keywords) => set({ keywords }),
-  setSelectedArticle: (article) => set({ selectedArticle: article }),
+  setSelectedArticle: (article) => set({ selectedArticle: article, selectedEventContext: null }),
+  setSelectedEventContext: (ctx) => set({ selectedEventContext: ctx, selectedArticle: null }),
+  setSelectedKnowledgeEvent: (id, title = null) => set({ selectedKnowledgeEventId: id, selectedKnowledgeEventTitle: id ? (title ?? null) : null }),
   setFetchingTopic: (id) => set({ fetchingTopicId: id }),
   setChatLoading: (v) => set({ isChatLoading: v }),
   setChatOpen: (v) => set({ chatOpen: v }),

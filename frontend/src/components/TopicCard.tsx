@@ -15,7 +15,9 @@ import {
   X,
   Archive,
   ArchiveRestore,
+  GripVertical,
 } from "lucide-react";
+import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import type { TopicOverview } from "@/lib/api";
 import {
   updateTopic,
@@ -43,6 +45,10 @@ interface TopicCardProps {
   onDeleted: (id: number) => void;
   onArchived?: (id: number) => void;
   onRestored?: (id: number) => void;
+  // Drag-and-drop props (optional — only set when sortable is enabled)
+  dragHandleListeners?: DraggableSyntheticListeners;
+  dragHandleAttributes?: DraggableAttributes;
+  isDragging?: boolean;
 }
 
 export default function TopicCard({
@@ -52,6 +58,9 @@ export default function TopicCard({
   onDeleted,
   onArchived,
   onRestored,
+  dragHandleListeners,
+  dragHandleAttributes,
+  isDragging = false,
 }: TopicCardProps) {
   const addToast = useStore((s) => s.addToast);
   const total = topic.article_count;
@@ -161,9 +170,11 @@ export default function TopicCard({
       onClick={blockNav ? (e) => e.preventDefault() : undefined}
     >
       <motion.div
-        whileHover={{ scale: blockNav ? 1 : 1.02, y: blockNav ? 0 : -2 }}
-        whileTap={{ scale: blockNav ? 1 : 0.98 }}
-        className="group relative p-5 rounded-xl border border-border bg-surface shadow-sm hover:shadow hover:border-accent/40 transition-all cursor-pointer h-full flex flex-col"
+        whileHover={{ scale: blockNav || isDragging ? 1 : 1.02, y: blockNav || isDragging ? 0 : -2 }}
+        whileTap={{ scale: blockNav || isDragging ? 1 : 0.98 }}
+        className={`group relative p-5 rounded-xl border bg-surface shadow-sm hover:shadow hover:border-accent/40 transition-all cursor-pointer h-full flex flex-col ${
+          isDragging ? "border-accent/60 shadow-lg" : "border-border"
+        }`}
       >
         <AnimatePresence>
           {overlay === "save" && (
@@ -359,6 +370,18 @@ export default function TopicCard({
               />
               <h2 className="text-base font-semibold truncate flex-1">{topic.name}</h2>
               <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-auto shrink-0">
+                {dragHandleListeners && (
+                  <button
+                    type="button"
+                    {...dragHandleListeners}
+                    {...dragHandleAttributes}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                    className="p-1 rounded-md text-muted hover:text-foreground hover:bg-surface-hover transition-colors cursor-grab active:cursor-grabbing"
+                    title="Drag to reorder"
+                  >
+                    <GripVertical className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 <button
                   onClick={startEdit}
                   className="p-1 rounded-md text-muted hover:text-foreground hover:bg-surface-hover transition-colors"

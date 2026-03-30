@@ -46,6 +46,7 @@ from database import (
     add_claim_evolution,
     get_recent_urls,
     get_recent_article_stubs,
+    get_recent_event_stubs,
     get_claims_v2,
     insert_article,
     insert_raw_news,
@@ -104,6 +105,90 @@ Return ONLY a valid JSON array. No markdown fences, no explanation."""
 # MLX runs inference sequentially; batching reduces call overhead dramatically.
 BATCH_SIZE = 4
 MAX_ENRICH = 12
+
+# Cluster synthesis — one call per batch of clusters (only for multi-article events)
+CLUSTER_SYNTHESIS_BATCH_SIZE = 8
+
+CLUSTER_SYNTHESIS_PROMPT = """You are a research analyst creating event cards for a news monitoring system.
+For each cluster below, synthesize ALL sources into ONE unified event card.
+
+Research Context:
+Topic: {topic_name}
+Research Brief: {research_brief}
+
+{clusters_block}
+
+Return a JSON array of exactly {n} objects (SAME ORDER as clusters above).
+Each object must have:
+- "event_title": 10-15 word title that describes WHAT HAPPENED specifically (not generic)
+- "event_summary": 2-3 sentences synthesizing key facts across ALL sources in this cluster
+
+Write in the same language as the source articles.
+Return ONLY a valid JSON array. No markdown fences, no explanation."""
+
+
+def _synthesize_cluster_events(
+    items: list[dict],
+    context_params: dict,
+) -> list[dict]:
+    """Generate event-level title and summary by synthesizing all articles in each cluster.
+
+    Takes canonical items that have _cluster_alts populated (event_size > 1).
+    Returns a list of dicts (same length as items), each with keys:
+      - "event_title": AI-synthesized event title
+      - "event_summary": AI-synthesized multi-source summary
+    Falls back to empty dict on error so callers can use article-level fallbacks.
+    """
+    results: list[dict] = [{} for _ in items]
+
+    for batch_start in range(0, len(items), CLUSTER_SYNTHESIS_BATCH_SIZE):
+        batch = items[batch_start: batch_start + CLUSTER_SYNTHESIS_BATCH_SIZE]
+
+        cluster_blocks: list[str] = []
+        for i, item in enumerate(batch):
+            alts = item.get("_cluster_alts") or []
+            title = item.get("title") or ""
+            source = item.get("source") or "unknown"
+            primary_line = f'Primary: "{title}" ({source})'
+            alt_lines = [
+                f'Also: "{alt.get("title", "")}" ({alt.get("source", "unknown")})'
+                for alt in alts[:4]
+                if alt.get("title")
+            ]
+            block = f"Cluster {i + 1} ({item.get('_event_size', 1)} sources):\n{primary_line}"
+            if alt_lines:
+                block += "\n" + "\n".join(alt_lines)
+            cluster_blocks.append(block)
+
+        clusters_block = "\n\n".join(cluster_blocks)
+        prompt = CLUSTER_SYNTHESIS_PROMPT.format(
+            n=len(batch),
+            clusters_block=clusters_block,
+            topic_name=context_params.get("topic_name", "General"),
+            research_brief=context_params.get("research_brief", "(not specified)"),
+        )
+
+        try:
+            raw = llm_chat([{"role": "user", "content": prompt}])
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+            parsed_list = json.loads(raw)
+            if isinstance(parsed_list, list) and len(parsed_list) == len(batch):
+                for j, synth in enumerate(parsed_list):
+                    results[batch_start + j] = synth if isinstance(synth, dict) else {}
+            else:
+                log.warning(
+                    "cluster synthesis returned %s items, expected %d — skipping",
+                    len(parsed_list) if isinstance(parsed_list, list) else type(parsed_list).__name__,
+                    len(batch),
+                )
+        except Exception as e:
+            log.error("cluster synthesis LLM error: %s", e)
+
+        log.info("cluster synthesis: processed %d cluster(s)", len(batch))
+
+    return results
 
 
 def _coerce_float(value, default: float = 0.0) -> float:
@@ -282,6 +367,38 @@ def _parse_weights() -> dict:
         return {}
 
 
+def _reconcile_event_id(item: dict, recent_stubs: list[dict], title_threshold: float = 0.40) -> str | None:
+    """Return an existing event_id if this canonical item matches a recent event.
+
+    Priority order:
+    1. Exact canonical URL match (same story, different run)
+    2. Title similarity above threshold within a 7-day window
+
+    Returns None if no match is found, caller should fall back to item['_event_id'].
+    """
+    from relevance import _title_similarity, _normalize, _time_close
+
+    item_url = (item.get("url") or "").strip()
+    item_title_norm = _normalize(item.get("title") or "")
+    item_date = item.get("published_date") or item.get("published_at") or ""
+
+    for stub in recent_stubs:
+        # Direct URL match
+        if item_url and stub.get("canonical_url") and item_url == stub["canonical_url"]:
+            return stub["id"]
+
+        # Title similarity
+        if not item_title_norm:
+            continue
+        stub_title_norm = _normalize(stub.get("title") or "")
+        if not stub_title_norm:
+            continue
+        if _title_similarity(item_title_norm, stub_title_norm) >= title_threshold:
+            return stub["id"]
+
+    return None
+
+
 def _cluster_and_select(items: list[dict], cluster_threshold: float | None = None) -> tuple[list[list[dict]], list[dict]]:
     """Cluster items by event, then pick best representative per cluster."""
     total = len(items)
@@ -374,15 +491,25 @@ def _enrich_and_store(
         ) or "  (not specified)",
     }
 
+    # Load recent event stubs once per _enrich_and_store call for reconciliation
+    recent_event_stubs: list[dict] = (
+        get_recent_event_stubs(topic_id, days=7) if topic_id is not None else []
+    )
+    # Snapshot IDs of events that existed BEFORE this batch — used to detect brand-new events
+    existing_event_ids_before_batch: set[str] = {s["id"] for s in recent_event_stubs}
+
     # Filter out already-seen URLs first so we only enrich genuinely new articles
     new_items: list[dict] = []
     for item in canonicals:
         if item["url"] in existing_urls:
             # Article already in DB — keep event_size in sync so the badge
             # stays accurate even if the cluster size grew since first insert.
+            # Also reconcile the event_id in case the cluster seed changed.
+            reconciled = _reconcile_event_id(item, recent_event_stubs)
+            effective_event_id = reconciled or item.get("_event_id", "")
             update_article_event_fields(
                 url=item["url"],
-                event_id=item.get("_event_id", ""),
+                event_id=effective_event_id,
                 is_canonical=1,
                 event_size=item.get("_event_size", 1),
             )
@@ -392,6 +519,23 @@ def _enrich_and_store(
 
     if not new_items:
         return []
+
+    # Pre-compute cluster-level title/summary for multi-article events.
+    # Uses raw article titles (available before LLM enrichment) so synthesis can
+    # run concurrently with — or before — the per-article enrichment loop.
+    multi_article_items = [item for item in new_items if item.get("_event_size", 1) > 1]
+    cluster_synthesis_list: list[dict] = []
+    # Build index: _event_id → synthesis result
+    cluster_synthesis_by_event_id: dict[str, dict] = {}
+    if multi_article_items:
+        log.info("synthesizing titles/summaries for %d multi-article cluster(s)", len(multi_article_items))
+        cluster_synthesis_list = _synthesize_cluster_events(multi_article_items, context_params)
+        for item, synth in zip(multi_article_items, cluster_synthesis_list):
+            if item.get("_event_id"):
+                cluster_synthesis_by_event_id[item["_event_id"]] = synth
+
+    # Track impacted event ids for delta-refresh (accumulated during this store pass)
+    impacted_event_ids: list[str] = []
 
     # Process in batches of BATCH_SIZE — each batch = one LLM call
     new_articles: list[dict] = []
@@ -406,6 +550,13 @@ def _enrich_and_store(
         for item, parsed in zip(batch, parsed_list):
             article_id = str(uuid.uuid4())
             breakdown = item.get("_source_breakdown", {})
+
+            # Reconcile event_id against recent events to avoid id drift
+            reconciled_event_id = _reconcile_event_id(item, recent_event_stubs)
+            effective_event_id = reconciled_event_id or item.get("_event_id") or f"evt-{uuid.uuid4().hex[:12]}"
+            if reconciled_event_id:
+                log.debug("reconciled event_id %s → %s for '%s'", item.get("_event_id"), reconciled_event_id, item.get("title", "")[:60])
+
             article = {
                 "id": article_id,
                 "title": item["title"],
@@ -419,7 +570,7 @@ def _enrich_and_store(
                 "source_type": item.get("_source_type", "search"),
                 "topic_id": topic_id,
                 "published_at": _normalize_date(item.get("published_date", "")),
-                "event_id": item.get("_event_id", ""),
+                "event_id": effective_event_id,
                 "is_canonical": item.get("_is_canonical", 1),
                 "event_size": item.get("_event_size", 1),
                 "source_score": item.get("_source_score", 0),
@@ -429,6 +580,7 @@ def _enrich_and_store(
                 "topic_analysis": parsed.get("topic_analysis", ""),
             }
             insert_article(article)
+            impacted_event_ids.append(effective_event_id)
 
             vector_text = (
                 f"{item['title']}. {parsed.get('summary', '')}. "
@@ -437,30 +589,54 @@ def _enrich_and_store(
             new_articles.append(article)
 
             if topic_id is not None:
-                event_id = item.get("_event_id") or f"evt-{uuid.uuid4().hex[:12]}"
+                event_id = effective_event_id
                 last_seen_at = article["published_at"] or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-                event_title = item.get("title") or parsed.get("summary") or "Untitled event"
-                event_summary = parsed.get("summary") or parsed.get("topic_analysis") or ""
-                event_status = "stabilized" if item.get("_event_size", 1) >= 3 else "active"
-                upsert_event(
-                    topic_id=topic_id,
-                    event_id=event_id,
-                    event_key=event_id,
-                    title=event_title,
-                    summary=event_summary,
-                    status=event_status,
-                    canonical_article_id=article_id,
-                    first_seen_at=last_seen_at,
-                    last_seen_at=last_seen_at,
-                    novelty_window_end=last_seen_at,
-                    stability_score=min(1.0, item.get("_event_size", 1) / 5),
-                    fact_confidence=min(1.0, _coerce_float(parsed.get("topic_relevance"), 0.5)),
-                    metadata={
-                        "source_score": item.get("_source_score", 0),
-                        "importance": article["importance"],
-                        "sentiment": article["sentiment"],
-                    },
+
+                # Use cluster-level synthesis for multi-article events; fall back to
+                # canonical article title/summary for single-article events.
+                cluster_synth = cluster_synthesis_by_event_id.get(item.get("_event_id", ""), {})
+                event_title = (
+                    cluster_synth.get("event_title")
+                    or item.get("title")
+                    or parsed.get("summary")
+                    or "Untitled event"
                 )
+                event_summary = (
+                    cluster_synth.get("event_summary")
+                    or parsed.get("summary")
+                    or parsed.get("topic_analysis")
+                    or ""
+                )
+
+                event_size = item.get("_event_size", 1)
+                # Only create/update an event record for multi-source clusters (2+ articles).
+                # Single-article entries remain as plain articles in the news feed only.
+                if event_size >= 2:
+                    event_status = "stabilized" if event_size >= 3 else "active"
+                    upsert_event(
+                        topic_id=topic_id,
+                        event_id=event_id,
+                        event_key=event_id,
+                        title=event_title,
+                        summary=event_summary,
+                        status=event_status,
+                        canonical_article_id=article_id,
+                        first_seen_at=last_seen_at,
+                        last_seen_at=last_seen_at,
+                        novelty_window_end=last_seen_at,
+                        stability_score=min(1.0, event_size / 5),
+                        fact_confidence=min(1.0, _coerce_float(parsed.get("topic_relevance"), 0.5)),
+                        metadata={
+                            "source_score": item.get("_source_score", 0),
+                            "importance": article["importance"],
+                            "sentiment": article["sentiment"],
+                        },
+                    )
+                    # Mark whether this event is brand-new (not previously known in stubs)
+                    if event_id not in existing_event_ids_before_batch:
+                        article["_is_new_event"] = True
+                # Add to reconciliation stubs so subsequent items in same batch can match
+                recent_event_stubs.append({"id": event_id, "title": event_title, "canonical_url": article["url"]})
 
                 statement, claim_summary = _build_claim_text(item, parsed)
                 claim_key = _statement_key(statement)
@@ -628,6 +804,10 @@ def _enrich_and_store(
 
     if topic_id is not None and touched_claim_ids:
         evaluate_claim_lifecycle(topic_id, touched_claim_ids=touched_claim_ids, source="pipeline")
+
+    # Attach impacted event ids to each article for SSE delta consumers
+    for art in new_articles:
+        art.setdefault("_impacted_event_id", art.get("event_id", ""))
 
     return new_articles
 

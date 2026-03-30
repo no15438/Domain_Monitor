@@ -12,9 +12,9 @@ import {
   Bookmark,
   Globe,
 } from "lucide-react";
-import type { EventCluster, ClusterSource } from "@/lib/api";
+import type { EventCluster, ClusterSource, PreviewSource } from "@/lib/api";
 import {
-  fetchEventSources,
+  fetchEventDetail,
   archiveEvent,
   restoreEvent,
   deleteEvent,
@@ -40,7 +40,7 @@ export default function EventCard({
   onArchived?: (id: string) => void;
   onRestored?: (id: string) => void;
 }) {
-  const setSelectedArticle = useStore((s) => s.setSelectedArticle);
+  const setSelectedEventContext = useStore((s) => s.setSelectedEventContext);
   const setChatOpen = useStore((s) => s.setChatOpen);
 
   const [curSentiment, setCurSentiment] = useState(event.sentiment);
@@ -50,6 +50,15 @@ export default function EventCard({
   const sentiment = sentimentConfig[curSentiment] ?? sentimentConfig.neutral;
   const SentimentIcon = sentiment.icon;
   const tags = parseTags(event.tags);
+
+  // Parse preview_sources from JSON string or array
+  const previewSources: PreviewSource[] = (() => {
+    const raw = event.preview_sources;
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw as PreviewSource[];
+    try { return JSON.parse(raw as string) as PreviewSource[]; }
+    catch { return []; }
+  })();
   const effImp = effectiveImportance(
     curImportance,
     event.published_at ?? event.created_at ?? event.first_seen_at ?? "",
@@ -72,8 +81,9 @@ export default function EventCard({
     }
     if (sources.length === 0) {
       setLoadingSources(true);
-      const data = await fetchEventSources(event.id);
-      setSources(data.sources.filter((s) => s.is_canonical === 0));
+      const data = await fetchEventDetail(event.id);
+      // Show all sources (canonical marked separately); full detail also provides canonical_content for chat
+      setSources(data.sources ?? []);
       setLoadingSources(false);
     }
     setExpanded(true);
@@ -101,31 +111,18 @@ export default function EventCard({
   }
 
   function handleAskAI() {
-    // Pass a minimal Article-shaped object so the chatbot can reference this event
-    setSelectedArticle({
-      id: event.canonical_article_id ?? event.id,
+    setSelectedEventContext({
+      event_id: event.id,
       title: event.title,
       summary: event.summary,
-      content: "",
-      source: event.canonical_source ?? "",
-      url: event.canonical_url ?? "",
-      tags: event.tags,
+      canonical_source: event.canonical_source ?? null,
+      canonical_url: event.canonical_url ?? null,
+      source_count: event.source_count,
       sentiment: event.sentiment,
       importance: event.importance,
-      source_type: event.source_type ?? "",
-      topic_id: event.topic_id,
-      published_at: event.published_at ?? "",
-      created_at: event.created_at ?? "",
-      event_id: event.id,
-      is_canonical: 1,
-      event_size: event.source_count,
-      source_score: event.source_score,
-      source_breakdown: "",
-      topic_relevance: 0,
-      key_entities: "",
-      topic_analysis: "",
-      is_kept: event.is_kept,
-      status: event.status,
+      tags: event.tags,
+      first_seen_at: event.first_seen_at ?? null,
+      last_seen_at: event.last_seen_at ?? null,
     });
     setChatOpen(true);
   }
@@ -251,6 +248,25 @@ export default function EventCard({
           </div>
         )}
 
+        {/* Preview sources strip — shown when source_count > 1 and detail not yet loaded */}
+        {previewSources.length > 0 && !expanded && (
+          <div className="flex flex-wrap gap-1 mb-2">
+            {previewSources.map((ps, i) => (
+              <a
+                key={i}
+                href={ps.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={ps.title}
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] bg-surface-hover text-muted hover:text-foreground transition-colors truncate max-w-[140px]"
+              >
+                <Globe className="w-2.5 h-2.5 shrink-0" />
+                {ps.source}
+              </a>
+            ))}
+          </div>
+        )}
+
         {/* Action row */}
         <div className="flex flex-wrap items-center gap-1.5">
           <button
@@ -337,13 +353,15 @@ export default function EventCard({
             exit={{ height: 0, opacity: 0 }}
             className="overflow-hidden border-t border-border bg-surface-hover/30"
           >
-            <div className="px-4 py-2 space-y-2">
+            <div className="px-4 py-2 space-y-0">
               {loadingSources ? (
                 <p className="text-[10px] text-muted py-2">Loading sources…</p>
               ) : sources.length === 0 ? (
-                <p className="text-[10px] text-muted py-2">No additional sources found.</p>
+                <p className="text-[10px] text-muted py-2">No sources found.</p>
               ) : (
-                sources.map((src) => <SourceRow key={src.id} source={src} />)
+                sources.map((src) => (
+                  <SourceRow key={src.id} source={src} isCanonical={src.is_canonical === 1} />
+                ))
               )}
             </div>
           </motion.div>
@@ -353,13 +371,20 @@ export default function EventCard({
   );
 }
 
-function SourceRow({ source }: { source: ClusterSource }) {
+function SourceRow({ source, isCanonical }: { source: ClusterSource; isCanonical?: boolean }) {
   return (
     <div className="flex items-center gap-2 py-1.5 border-b border-border/50 last:border-0">
       <div className="flex-1 min-w-0">
-        <p className="text-[11px] font-medium leading-snug line-clamp-1">
-          {source.title}
-        </p>
+        <div className="flex items-center gap-1.5 mb-0.5">
+          {isCanonical && (
+            <span className="px-1 py-0.5 rounded text-[9px] font-semibold bg-accent/10 text-accent uppercase tracking-wide shrink-0">
+              Primary
+            </span>
+          )}
+          <p className="text-[11px] font-medium leading-snug line-clamp-1">
+            {source.title}
+          </p>
+        </div>
         <div className="flex items-center gap-2 mt-0.5">
           <span className="text-[9px] text-muted">{source.source || "web"}</span>
           {source.source_score > 0 && (

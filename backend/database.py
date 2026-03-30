@@ -334,6 +334,7 @@ def _migrate_lineage_tables(conn):
         ("research_config", "TEXT DEFAULT '{}'"),
         ("pipeline_config", "TEXT DEFAULT '{}'"),
         ("archived_at", "TEXT"),
+        ("sort_order", "INTEGER DEFAULT 0"),
     ]:
         try:
             conn.execute(f"ALTER TABLE topics ADD COLUMN {tcol} {tdef}")
@@ -369,10 +370,22 @@ def get_topics():
     rows = conn.execute(
         """SELECT * FROM topics
            WHERE is_active = 1 AND archived_at IS NULL
-           ORDER BY created_at"""
+           ORDER BY sort_order ASC, created_at"""
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def reorder_topics(ordered_ids: list[int]):
+    """Persist a new display order for topics by updating sort_order."""
+    conn = _conn()
+    for idx, topic_id in enumerate(ordered_ids):
+        conn.execute(
+            "UPDATE topics SET sort_order = ? WHERE id = ?",
+            (idx, topic_id),
+        )
+    conn.commit()
+    conn.close()
 
 
 def create_topic(name: str, color: str = "#6366f1"):
@@ -698,6 +711,27 @@ def replace_event_sources(event_id: str, sources: list[dict]):
     conn.close()
 
 
+def get_recent_event_stubs(topic_id: int, days: int = 7) -> list[dict]:
+    """Return lightweight stubs of recent events for pipeline reconciliation.
+
+    Returns id, title, canonical_url so the pipeline can detect whether a new
+    cluster matches an existing event before creating a fresh event_id.
+    """
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT e.id, e.title, a.url AS canonical_url
+           FROM events_v2 e
+           LEFT JOIN articles a ON a.id = e.canonical_article_id
+           WHERE e.topic_id = ?
+             AND e.first_seen_at >= datetime('now', ? || ' days')
+           ORDER BY e.first_seen_at DESC
+           LIMIT 500""",
+        (topic_id, f"-{days}"),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_events_v2(topic_id: int, status: str | None = None, limit: int = 50):
     conn = _conn()
     where = "WHERE topic_id = ?"
@@ -989,6 +1023,35 @@ def get_active_claims(topic_id: int, limit: int = 100):
     ).fetchall()
     conn.close()
     return [_serialize_claim_row(row) for row in rows]
+
+
+def get_claims_for_event(event_id: str, limit: int = 20) -> list[dict]:
+    """Return claims associated with an event via evidence_sets.
+
+    A claim is linked to this event if at least one evidence_set row has
+    both event_id = ? and a non-null claim_id referencing that claim.
+    Each result includes an evidence_count field reflecting how many
+    evidence rows for this event support that claim.
+    """
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT c.*,
+                  COUNT(es.id) AS evidence_count
+           FROM claims c
+           INNER JOIN evidence_sets es ON es.claim_id = c.id AND es.event_id = ?
+           WHERE c.status IN ('active', 'stale', 'superseded')
+           GROUP BY c.id
+           ORDER BY c.last_validated_at DESC, c.created_at DESC
+           LIMIT ?""",
+        (event_id, limit),
+    ).fetchall()
+    conn.close()
+    results = []
+    for row in rows:
+        item = _serialize_claim_row(row)
+        item["evidence_count"] = row["evidence_count"]
+        results.append(item)
+    return results
 
 
 def get_current_claims(topic_id: int, limit: int = 100):
@@ -1283,22 +1346,27 @@ def restore_article(article_id: str):
     conn.close()
 
 
-def get_articles(limit=50, offset=0, topic_id=None, sort="relevance", status="active"):
+def get_articles(limit=50, offset=0, topic_id=None, sort="relevance", status="active", event_id=None):
     conn = _conn()
     order = (
         "ORDER BY (importance * EXP(-0.023 * MAX(julianday('now') - julianday(COALESCE(published_at, created_at)), 0))) DESC, COALESCE(published_at, created_at) DESC"
         if sort == "relevance"
         else "ORDER BY COALESCE(published_at, created_at) DESC"
     )
-    status_filter = "AND COALESCE(status, 'active') = ?" if status else ""
+    where_parts = ["1=1"]
     params: list = []
     if topic_id is not None:
-        base = f"SELECT * FROM articles WHERE topic_id = ? {status_filter} {order} LIMIT ? OFFSET ?"
-        params = [topic_id] + ([status] if status else []) + [limit, offset]
-    else:
-        base = f"SELECT * FROM articles WHERE 1=1 {status_filter} {order} LIMIT ? OFFSET ?"
-        params = ([status] if status else []) + [limit, offset]
-    rows = conn.execute(base, params).fetchall()
+        where_parts.append("topic_id = ?")
+        params.append(topic_id)
+    if event_id is not None:
+        where_parts.append("event_id = ?")
+        params.append(event_id)
+    if status:
+        where_parts.append("COALESCE(status, 'active') = ?")
+        params.append(status)
+    where = "WHERE " + " AND ".join(where_parts)
+    base = f"SELECT * FROM articles {where} {order} LIMIT ? OFFSET ?"
+    rows = conn.execute(base, params + [limit, offset]).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -1358,19 +1426,21 @@ def update_article_event_fields(url: str, event_id: str, is_canonical: int, even
     conn.close()
 
 
-def get_article_count(topic_id=None, status="active"):
+def get_article_count(topic_id=None, status="active", event_id=None):
     conn = _conn()
-    status_filter = "AND COALESCE(status, 'active') = ?" if status else ""
+    where_parts = ["1=1"]
+    params: list = []
     if topic_id is not None:
-        count = conn.execute(
-            f"SELECT COUNT(*) FROM articles WHERE topic_id = ? {status_filter}",
-            (topic_id,) + ((status,) if status else ()),
-        ).fetchone()[0]
-    else:
-        count = conn.execute(
-            f"SELECT COUNT(*) FROM articles WHERE 1=1 {status_filter}",
-            (status,) if status else (),
-        ).fetchone()[0]
+        where_parts.append("topic_id = ?")
+        params.append(topic_id)
+    if event_id is not None:
+        where_parts.append("event_id = ?")
+        params.append(event_id)
+    if status:
+        where_parts.append("COALESCE(status, 'active') = ?")
+        params.append(status)
+    where = "WHERE " + " AND ".join(where_parts)
+    count = conn.execute(f"SELECT COUNT(*) FROM articles {where}", params).fetchone()[0]
     conn.close()
     return count
 
@@ -1574,37 +1644,47 @@ def get_recent_article_stubs(topic_id=None, hours=48):
 def get_insight_summary(topic_id=None, hours=24):
     """Aggregate stats: top events, counts, source distribution."""
     conn = _conn()
-    time_filter = "AND created_at >= datetime('now', ?)"
-    base_where = "WHERE COALESCE(status, 'active') = 'active'"
+    hour_arg = f"-{hours} hours"
+    # Table-qualify columns so JOIN subqueries never see ambiguous names (e.g. status on a vs e).
+    base_where = "WHERE COALESCE(articles.status, 'active') = 'active'"
     params: list = []
 
     if topic_id is not None:
-        base_where += " AND topic_id = ?"
+        base_where += " AND articles.topic_id = ?"
         params.append(topic_id)
 
-    params_with_time = params + [f"-{hours} hours"]
+    base_where += " AND articles.created_at >= datetime('now', ?)"
+    params_with_time = params + [hour_arg]
 
     total = conn.execute(
-        f"SELECT COUNT(*) FROM articles {base_where} {time_filter}",
+        f"SELECT COUNT(*) FROM articles {base_where}",
         params_with_time,
     ).fetchone()[0]
 
     important = conn.execute(
-        f"SELECT COUNT(*) FROM articles {base_where} {time_filter} AND importance >= 8",
+        f"SELECT COUNT(*) FROM articles {base_where} AND articles.importance >= 8",
         params_with_time,
     ).fetchone()[0]
 
     source_rows = conn.execute(
-        f"SELECT source_type, COUNT(*) as cnt FROM articles {base_where} {time_filter} GROUP BY source_type ORDER BY cnt DESC",
+        f"SELECT articles.source_type, COUNT(*) as cnt FROM articles {base_where} GROUP BY articles.source_type ORDER BY cnt DESC",
         params_with_time,
     ).fetchall()
     source_dist = {r["source_type"]: r["cnt"] for r in source_rows}
 
     sentiment_rows = conn.execute(
-        f"SELECT sentiment, COUNT(*) as cnt FROM articles {base_where} {time_filter} GROUP BY sentiment",
+        f"SELECT articles.sentiment, COUNT(*) as cnt FROM articles {base_where} GROUP BY articles.sentiment",
         params_with_time,
     ).fetchall()
     sentiment_dist = {r["sentiment"]: r["cnt"] for r in sentiment_rows}
+
+    join_where = "WHERE COALESCE(a.status, 'active') = 'active'"
+    join_params: list = []
+    if topic_id is not None:
+        join_where += " AND a.topic_id = ?"
+        join_params.append(topic_id)
+    join_where += " AND a.created_at >= datetime('now', ?) AND a.is_canonical = 1"
+    join_params.append(hour_arg)
 
     top_events = conn.execute(
         f"""SELECT
@@ -1635,12 +1715,12 @@ def get_insight_summary(topic_id=None, hours=24):
                    AND sub.event_id != '')                                       AS source_count
             FROM articles a
             LEFT JOIN events_v2 e ON e.id = a.event_id
-            {base_where} {time_filter} AND a.is_canonical = 1
+            {join_where}
             ORDER BY source_count DESC,
                      (a.importance * EXP(-0.023 * MAX(julianday('now') - julianday(COALESCE(a.published_at, a.created_at)), 0))) DESC,
                      a.source_score DESC
             LIMIT 5""",
-        params_with_time,
+        join_params,
     ).fetchall()
 
     conn.close()
@@ -1653,11 +1733,13 @@ def get_insight_summary(topic_id=None, hours=24):
     }
 
 
-def get_event_clusters(topic_id=None, limit=30, offset=0, sort="relevance", status="active"):
-    """Return event-level DTO list by joining events_v2 with canonical articles.
+def get_event_card_summaries(topic_id=None, limit=30, offset=0, sort="relevance", status="active"):
+    """Return lightweight event card summaries for the Events list view.
 
-    Falls back gracefully to article-derived fields when no events_v2 entry exists,
-    so existing data from before the events_v2 migration still appears correctly.
+    Primary table is articles (canonical=1) LEFT JOIN events_v2 for backward
+    compatibility with events that predate the events_v2 table.
+    Includes preview_sources (top 2 non-canonical source names) as a JSON array.
+    Does NOT return content / key_entities / topic_analysis — use get_event_detail().
     """
     conn = _conn()
 
@@ -1672,15 +1754,98 @@ def get_event_clusters(topic_id=None, limit=30, offset=0, sort="relevance", stat
         params.append(topic_id)
 
     where = "WHERE " + " AND ".join(where_parts)
+    eid_expr = "COALESCE(e.id, a.event_id)"
 
     order = (
-        "ORDER BY (COALESCE(a.importance, 5) * EXP(-0.023 * MAX(julianday('now') - julianday(COALESCE(a.published_at, a.created_at)), 0))) DESC, source_count DESC, COALESCE(a.published_at, a.created_at) DESC"
+        f"ORDER BY (COALESCE(a.importance, 5) * EXP(-0.023 * MAX(julianday('now') - julianday(COALESCE(a.published_at, a.created_at)), 0))) DESC, source_count DESC, COALESCE(a.published_at, a.created_at) DESC"
         if sort == "relevance"
         else "ORDER BY COALESCE(a.published_at, a.created_at) DESC"
     )
 
     rows = conn.execute(
         f"""
+        SELECT
+            {eid_expr}                                                         AS id,
+            a.topic_id,
+            COALESCE(e.title, a.title)                                         AS title,
+            COALESCE(NULLIF(e.summary, ''), a.summary, '')                     AS summary,
+            COALESCE(a.status, 'active')                                       AS status,
+            COALESCE(e.status, 'active')                                       AS event_status,
+            COALESCE(e.canonical_article_id, a.id)                             AS canonical_article_id,
+            a.url                                                               AS canonical_url,
+            a.source                                                            AS canonical_source,
+            a.source_type,
+            COALESCE(a.source_score, 0)                                        AS source_score,
+            COALESCE(a.sentiment, 'neutral')                                   AS sentiment,
+            COALESCE(a.importance, 5)                                          AS importance,
+            COALESCE(a.tags, '[]')                                             AS tags,
+            COALESCE(a.is_kept, 0)                                             AS is_kept,
+            a.published_at,
+            a.created_at,
+            COALESCE(e.first_seen_at, a.published_at, a.created_at)            AS first_seen_at,
+            COALESCE(e.last_seen_at, a.published_at, a.created_at)             AS last_seen_at,
+            COALESCE(e.stability_score, 0)                                     AS stability_score,
+            COALESCE(e.fact_confidence, 0)                                     AS fact_confidence,
+            (SELECT COUNT(*) FROM articles sub
+             WHERE sub.event_id = {eid_expr}
+               AND sub.event_id IS NOT NULL
+               AND sub.event_id != '')                                          AS source_count,
+            (SELECT json_group_array(json_object(
+                        'source', ps.source,
+                        'title',  ps.title,
+                        'url',    ps.url,
+                        'source_score', ps.source_score
+                    ))
+             FROM (SELECT source, title, url, source_score
+                   FROM articles ps
+                   WHERE ps.event_id = {eid_expr}
+                     AND ps.is_canonical = 0
+                     AND ps.event_id IS NOT NULL
+                   ORDER BY ps.source_score DESC
+                   LIMIT 2) ps)                                                 AS preview_sources
+        FROM articles a
+        LEFT JOIN events_v2 e ON e.id = a.event_id
+        {where}
+        {order}
+        LIMIT ? OFFSET ?
+        """,
+        params + [limit, offset],
+    ).fetchall()
+
+    # Filter out single-source events — only show true multi-source aggregations
+    rows = [r for r in rows if (r["source_count"] or 0) >= 2]
+
+    # One row per logical event: multiple canonical rows can share the same event_id
+    # (merge artifacts, bad data), which would duplicate React keys in the UI.
+    _seen_ids: set[str] = set()
+    _deduped: list = []
+    for r in rows:
+        rid = r["id"]
+        if not rid or rid in _seen_ids:
+            continue
+        _seen_ids.add(rid)
+        _deduped.append(r)
+    rows = _deduped
+
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM articles a {where}",
+        params,
+    ).fetchone()[0]
+
+    conn.close()
+    return rows, total
+
+
+def get_event_detail(event_id: str) -> dict | None:
+    """Return full event detail including canonical article content and all sources.
+
+    Used by the event card expanded view and Ask AI context.
+    Returns None if the event_id is not found.
+    """
+    conn = _conn()
+
+    row = conn.execute(
+        """
         SELECT
             COALESCE(e.id, a.event_id, a.id)                              AS id,
             a.topic_id,
@@ -1703,26 +1868,51 @@ def get_event_clusters(topic_id=None, limit=30, offset=0, sort="relevance", stat
             COALESCE(e.last_seen_at, a.published_at, a.created_at)         AS last_seen_at,
             COALESCE(e.stability_score, 0)                                 AS stability_score,
             COALESCE(e.fact_confidence, 0)                                 AS fact_confidence,
+            -- Canonical article full-text fields for chat / search context
+            a.content                                                       AS canonical_content,
+            a.key_entities                                                  AS canonical_key_entities,
+            a.topic_analysis                                                AS canonical_topic_analysis,
+            -- Store the canonical article's own event_id for sources lookup
+            a.event_id                                                      AS article_event_id,
             (SELECT COUNT(*) FROM articles sub
              WHERE sub.event_id = COALESCE(e.id, a.event_id)
                AND sub.event_id IS NOT NULL
                AND sub.event_id != '')                                      AS source_count
         FROM articles a
         LEFT JOIN events_v2 e ON e.id = a.event_id
-        {where}
-        {order}
-        LIMIT ? OFFSET ?
+        WHERE COALESCE(e.id, a.event_id, a.id) = ?
+          AND a.is_canonical = 1
+        LIMIT 1
         """,
-        params + [limit, offset],
-    ).fetchall()
+        (event_id,),
+    ).fetchone()
 
-    total = conn.execute(
-        f"SELECT COUNT(*) FROM articles a {where}",
-        params,
-    ).fetchone()[0]
+    if row is None:
+        conn.close()
+        return None
+
+    detail = dict(row)
+
+    # Use the canonical article's own event_id for sources lookup — avoids
+    # the mismatch where events_v2.id differs from articles.event_id.
+    article_event_id = detail.pop("article_event_id", None) or event_id
+
+    sources = conn.execute(
+        """SELECT id, title, source, url, published_at, source_score, source_type, is_canonical
+           FROM articles
+           WHERE event_id = ?
+           ORDER BY is_canonical DESC, source_score DESC""",
+        (article_event_id,),
+    ).fetchall()
+    detail["sources"] = [dict(s) for s in sources]
 
     conn.close()
-    return [dict(r) for r in rows], total
+    return detail
+
+
+def get_event_clusters(topic_id=None, limit=30, offset=0, sort="relevance", status="active"):
+    """Kept for backward compatibility — delegates to get_event_card_summaries()."""
+    return get_event_card_summaries(topic_id=topic_id, limit=limit, offset=offset, sort=sort, status=status)
 
 
 def get_event_sources(event_id: str) -> list[dict]:
@@ -1768,6 +1958,76 @@ def delete_event_cluster(event_id: str):
     conn.execute("DELETE FROM events_v2 WHERE id = ?", (event_id,))
     conn.commit()
     conn.close()
+
+
+def deduplicate_events(topic_id: int, similarity_threshold: float = 0.40) -> int:
+    """Find near-duplicate events for a topic and merge the weaker one into the stronger.
+
+    Two events are considered duplicates when their titles have similarity >=
+    similarity_threshold.  The event with more sources (higher stability_score)
+    is kept; articles belonging to the weaker event are re-assigned to the keeper
+    and the weaker events_v2 row is deleted.
+
+    Returns the number of merge operations performed.
+    """
+    from difflib import SequenceMatcher
+    import re as _re
+
+    _CJK = _re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+
+    def _norm(t: str) -> str:
+        return _re.sub(r"[^\w\s]", "", t, flags=_re.UNICODE).lower().strip()
+
+    def _ngrams(t: str, n: int = 2) -> set:
+        grams: set = set()
+        for tok in t.split():
+            if not _CJK.search(tok) and len(tok) >= 3:
+                grams.add(tok)
+        cjk = "".join(_CJK.findall(t))
+        for i in range(len(cjk) - n + 1):
+            grams.add(cjk[i:i + n])
+        return grams
+
+    def _sim(a: str, b: str) -> float:
+        na, nb = _norm(a), _norm(b)
+        seq = SequenceMatcher(None, na, nb).ratio()
+        wa, wb = _ngrams(na), _ngrams(nb)
+        if not wa or not wb:
+            return seq
+        overlap = len(wa & wb) / min(len(wa), len(wb))
+        return max(seq, overlap)
+
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT id, title, stability_score
+           FROM events_v2 WHERE topic_id = ? AND status != 'archived'
+           ORDER BY stability_score DESC""",
+        (topic_id,),
+    ).fetchall()
+    events = [dict(r) for r in rows]
+
+    merged: set[str] = set()
+    merge_count = 0
+
+    for i, ev_a in enumerate(events):
+        if ev_a["id"] in merged:
+            continue
+        for ev_b in events[i + 1:]:
+            if ev_b["id"] in merged:
+                continue
+            if _sim(ev_a["title"], ev_b["title"]) >= similarity_threshold:
+                # Keep ev_a (higher stability_score), absorb ev_b into it
+                conn.execute(
+                    "UPDATE articles SET event_id = ? WHERE event_id = ?",
+                    (ev_a["id"], ev_b["id"]),
+                )
+                conn.execute("DELETE FROM events_v2 WHERE id = ?", (ev_b["id"],))
+                merged.add(ev_b["id"])
+                merge_count += 1
+
+    conn.commit()
+    conn.close()
+    return merge_count
 
 
 def toggle_event_kept(event_id: str, is_kept: int):
@@ -2096,3 +2356,29 @@ def task_cleanup_stale(timeout_minutes: int = 30):
     )
     conn.commit()
     conn.close()
+
+
+# ── Claims CRUD ────────────────────────────────────────────────────────────────
+
+def update_claim_status(claim_id: str, status: str) -> bool:
+    """Update the status of a claim. Returns True if a row was updated."""
+    from datetime import datetime, timezone
+    conn = _conn()
+    cur = conn.execute(
+        "UPDATE claims SET status = ?, updated_at = ? WHERE id = ?",
+        (status, datetime.now(timezone.utc).isoformat(), claim_id),
+    )
+    conn.commit()
+    updated = cur.rowcount > 0
+    conn.close()
+    return updated
+
+
+def delete_claim(claim_id: str) -> bool:
+    """Permanently delete a claim by ID. Returns True if a row was deleted."""
+    conn = _conn()
+    cur = conn.execute("DELETE FROM claims WHERE id = ?", (claim_id,))
+    conn.commit()
+    deleted = cur.rowcount > 0
+    conn.close()
+    return deleted

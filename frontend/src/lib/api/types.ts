@@ -168,6 +168,20 @@ export interface Claim {
   freshness?: string;
 }
 
+/** Lightweight claim summary embedded inside an event card. */
+export interface EventClaimSummary {
+  id: string;
+  statement: string;
+  summary: string;
+  status: string;
+  claim_kind?: string;
+  lifecycle_status?: string;
+  staleness_status?: string;
+  freshness?: string;
+  last_refreshed_at?: string;
+  evidence_count: number;
+}
+
 export interface EventRecord {
   id: string;
   topic_id: number;
@@ -232,6 +246,15 @@ export interface ClusterSource {
   is_canonical: number;
 }
 
+/** Preview source — one row in the preview_sources JSON from /api/events list */
+export interface PreviewSource {
+  source: string;
+  title: string;
+  url: string;
+  source_score: number;
+}
+
+/** Lightweight event card summary returned by GET /api/events (list view). */
 export interface EventCluster {
   id: string;                             // events_v2.id or articles.event_id
   topic_id: number | null;
@@ -255,6 +278,17 @@ export interface EventCluster {
   stability_score: number;
   fact_confidence: number;
   source_count: number;                   // total articles in this cluster
+  /** Top 2 non-canonical sources for card preview (JSON string or null). */
+  preview_sources?: string | PreviewSource[] | null;
+}
+
+/** Full event detail returned by GET /api/events/{event_id}.
+ *  Contains all EventCluster fields plus canonical article full text and sources. */
+export interface EventDetail extends EventCluster {
+  canonical_content: string | null;
+  canonical_key_entities: string | null;
+  canonical_topic_analysis: string | null;
+  sources: ClusterSource[];
 }
 
 export interface InsightSummary {

@@ -30,6 +30,14 @@ export async function fetchArchivedTopicsOverview(
   return safeJson(res, { topics: [] }, ["topics"]);
 }
 
+export async function reorderTopics(orderedIds: number[]): Promise<void> {
+  await fetch(`${BASE}/api/topics/reorder`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ordered_ids: orderedIds }),
+  });
+}
+
 export async function fetchTrending(
   topicId: number,
   days = 7,

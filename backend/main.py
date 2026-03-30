@@ -24,6 +24,7 @@ from database import (
     get_topics,
     create_topic,
     update_topic,
+    reorder_topics,
     archive_topic,
     unarchive_topic,
     delete_topic,
@@ -31,12 +32,19 @@ from database import (
     add_topic_feed,
     remove_topic_feed,
     get_insight_summary,
+    get_event_card_summaries,
+    get_event_detail,
+    get_recent_event_stubs,
     get_event_clusters,
     get_event_sources,
     archive_event_cluster,
     restore_event_cluster,
     delete_event_cluster,
     toggle_event_kept,
+    deduplicate_events,
+    get_claims_for_event,
+    update_claim_status,
+    delete_claim,
     get_events_grouped,
     get_event_alternatives,
     get_topic_insights,
@@ -212,6 +220,14 @@ class TopicUpdateReq(BaseModel):
     pipeline_config: Optional[str] = None
 
 
+@app.put("/api/topics/reorder")
+async def api_reorder_topics(body: dict):
+    ordered_ids = [int(i) for i in body.get("ordered_ids", [])]
+    if ordered_ids:
+        await asyncio.to_thread(reorder_topics, ordered_ids)
+    return {"status": "ok"}
+
+
 @app.put("/api/topics/{topic_id}")
 async def api_update_topic(topic_id: int, req: TopicUpdateReq):
     await asyncio.to_thread(
@@ -359,15 +375,15 @@ async def api_remove_feed(feed_id: int):
 
 
 @app.get("/api/articles")
-async def list_articles(limit: int = 50, offset: int = 0, topic_id: Optional[int] = None, sort: str = "relevance", status: str = "active"):
+async def list_articles(limit: int = 50, offset: int = 0, topic_id: Optional[int] = None, sort: str = "relevance", status: str = "active", event_id: Optional[str] = None):
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     if status not in {"active", "archived"}:
         status = "active"
     if sort not in {"relevance", "latest"}:
         sort = "relevance"
-    articles = await asyncio.to_thread(get_articles, limit, offset, topic_id, sort, status)
-    total = await asyncio.to_thread(get_article_count, topic_id, status)
+    articles = await asyncio.to_thread(get_articles, limit, offset, topic_id, sort, status, event_id or None)
+    total = await asyncio.to_thread(get_article_count, topic_id, status, event_id or None)
     return {"articles": articles, "total": total}
 
 
@@ -458,14 +474,69 @@ async def api_list_events(
         status = "active"
     if sort not in {"relevance", "latest"}:
         sort = "relevance"
-    events, total = await asyncio.to_thread(get_event_clusters, topic_id, limit, offset, sort, status)
+    events, total = await asyncio.to_thread(get_event_card_summaries, topic_id, limit, offset, sort, status)
     return {"events": events, "total": total}
+
+
+@app.get("/api/events/changed")
+async def api_events_changed(ids: str = "", topic_id: Optional[int] = None):
+    """Return lightweight event summaries for a comma-separated list of event ids.
+
+    Used by the frontend to refresh only impacted events after an SSE push,
+    rather than reloading the entire list.
+    """
+    if not ids.strip():
+        return {"events": []}
+    id_list = [i.strip() for i in ids.split(",") if i.strip()][:50]
+    results = []
+    for eid in id_list:
+        detail = await asyncio.to_thread(get_event_detail, eid)
+        if detail:
+            # Strip heavy fields for the delta response
+            detail.pop("canonical_content", None)
+            detail.pop("canonical_key_entities", None)
+            detail.pop("canonical_topic_analysis", None)
+            results.append(detail)
+    return {"events": results}
 
 
 @app.get("/api/events/{event_id}/sources")
 async def api_event_sources(event_id: str):
     sources = await asyncio.to_thread(get_event_sources, event_id)
     return {"sources": sources}
+
+
+@app.get("/api/events/{event_id}/claims")
+async def api_event_claims(event_id: str):
+    """Return claims associated with a specific event via evidence_sets."""
+    claims = await asyncio.to_thread(get_claims_for_event, event_id, 20)
+    return {"claims": claims}
+
+
+@app.put("/api/claims/{claim_id}/status")
+async def api_update_claim_status(claim_id: str, body: dict):
+    """Update the status field of a claim (active | rejected | superseded)."""
+    status = body.get("status", "")
+    allowed = {"active", "rejected", "superseded", "stale", "archived"}
+    if status not in allowed:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Allowed: {sorted(allowed)}")
+    updated = await asyncio.to_thread(update_claim_status, claim_id, status)
+    return {"updated": updated}
+
+
+@app.delete("/api/claims/{claim_id}")
+async def api_delete_claim(claim_id: str):
+    """Permanently delete a claim by ID."""
+    deleted = await asyncio.to_thread(delete_claim, claim_id)
+    return {"deleted": deleted}
+
+
+@app.post("/api/topics/{topic_id}/deduplicate-events")
+async def api_deduplicate_events(topic_id: int):
+    """Merge near-duplicate events for a topic. Returns number of merges performed."""
+    merged = await asyncio.to_thread(deduplicate_events, topic_id)
+    return {"merged": merged}
 
 
 @app.put("/api/events/{event_id}/archive")
@@ -494,13 +565,31 @@ async def api_toggle_event_kept(event_id: str, body: dict):
 
 
 @app.get("/api/events/{event_id}")
-async def api_event_detail(event_id: str):
-    """Legacy: return sources for this event cluster."""
-    sources = await asyncio.to_thread(get_event_sources, event_id)
-    return {"sources": sources, "articles": sources}
+async def api_event_detail_route(event_id: str):
+    """Return full event detail: event fields + canonical article content + sources."""
+    detail = await asyncio.to_thread(get_event_detail, event_id)
+    if detail is None:
+        # Fallback: try sources-only for legacy event ids
+        sources = await asyncio.to_thread(get_event_sources, event_id)
+        return {"event": None, "sources": sources}
+    sources = detail.pop("sources", [])
+    return {"event": detail, "sources": sources}
 
 
 # ── Manual fetch ──────────────────────────────────────
+
+
+def _build_sse_delta(new_articles: list[dict]) -> dict:
+    """Build a structured SSE delta payload from freshly enriched articles.
+
+    Strips internal pipeline fields (_*) before sending to clients, and collects
+    unique impacted event ids and brand-new event ids so the frontend can refresh
+    affected event cards and auto-trigger evolution when genuinely new events appear.
+    """
+    impacted = list({a.get("_impacted_event_id", a.get("event_id", "")) for a in new_articles if a.get("event_id")})
+    new_event_ids = list({a.get("_impacted_event_id", a.get("event_id", "")) for a in new_articles if a.get("_is_new_event") and a.get("event_id")})
+    clean = [{k: v for k, v in a.items() if not k.startswith("_")} for a in new_articles]
+    return {"articles": clean, "impacted_event_ids": impacted, "new_event_ids": new_event_ids}
 
 
 async def _run_fetch_background(topic_id: Optional[int]):
@@ -508,7 +597,12 @@ async def _run_fetch_background(topic_id: Optional[int]):
     try:
         new = await asyncio.to_thread(run_pipeline_once, topic_id)
         if new:
-            notify_clients(new)
+            notify_clients(_build_sse_delta(new))
+        # Deduplicate near-identical events produced by this or previous fetches
+        if topic_id is not None:
+            merged = await asyncio.to_thread(deduplicate_events, topic_id)
+            if merged:
+                log.info("topic %s: merged %d duplicate event(s)", topic_id, merged)
         _bg_finish(key, result=f"{len(new)} new articles")
     except Exception as e:
         log.error("fetch-now error for topic %s: %s", topic_id, e)

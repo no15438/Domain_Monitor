@@ -65,7 +65,15 @@ def _fetch_job():
             log.info("topic %d: running fetch …", tid)
             new_articles = run_pipeline_once(tid)
             if new_articles:
-                notify_clients(new_articles)
+                impacted = list({a.get("_impacted_event_id", a.get("event_id", "")) for a in new_articles if a.get("event_id")})
+                new_event_ids = list({a.get("_impacted_event_id", a.get("event_id", "")) for a in new_articles if a.get("_is_new_event") and a.get("event_id")})
+                clean = [{k: v for k, v in a.items() if not k.startswith("_")} for a in new_articles]
+                notify_clients({"articles": clean, "impacted_event_ids": impacted, "new_event_ids": new_event_ids})
+            # Deduplicate near-duplicate events after each fetch
+            from database import deduplicate_events as _dedup
+            merged = _dedup(tid)
+            if merged:
+                log.info("topic %d: merged %d duplicate event(s)", tid, merged)
             log.info("topic %d: done — %d new articles", tid, len(new_articles))
             _main._bg_finish(key, result=f"{len(new_articles)} new articles")
         except Exception as e:

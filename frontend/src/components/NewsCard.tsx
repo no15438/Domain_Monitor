@@ -5,7 +5,6 @@ import { motion } from "framer-motion";
 import {
   ExternalLink,
   Sparkles,
-  Layers,
   Shield,
   Bookmark,
 } from "lucide-react";
@@ -88,15 +87,6 @@ export default function NewsCard({
           <SentimentIcon className="w-3 h-3" />
           {curSentiment}
         </span>
-        {article.event_size > 1 && (
-          <span
-            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent/10 text-accent"
-            title={`${article.event_size} sources report this event`}
-          >
-            <Layers className="w-3 h-3" />
-            {article.event_size}
-          </span>
-        )}
         {article.source_score > 0 && (
           <span
             className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"

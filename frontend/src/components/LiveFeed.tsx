@@ -47,7 +47,7 @@ export default function LiveFeed() {
 
   useEffect(() => {
     let alive = true;
-    const sse = createSSEConnection((incoming) => {
+    const sse = createSSEConnection(({ articles: incoming }) => {
       if (!alive) return;
       const filtered =
         activeTopicId != null

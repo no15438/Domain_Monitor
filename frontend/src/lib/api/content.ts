@@ -1,5 +1,5 @@
 import { BASE, fetchWithRetry, safeJson } from "./shared";
-import type { Article, EventCluster, ClusterSource } from "./types";
+import type { Article, EventCluster, EventDetail, ClusterSource } from "./types";
 
 export async function fetchArticles(
   limit = 50,
@@ -7,6 +7,7 @@ export async function fetchArticles(
   topicId?: number | null,
   sort: "relevance" | "latest" = "relevance",
   status: "active" | "archived" = "active",
+  eventId?: string | null,
   signal?: AbortSignal,
 ): Promise<{ articles: Article[]; total: number }> {
   const params = new URLSearchParams({
@@ -16,6 +17,7 @@ export async function fetchArticles(
     status,
   });
   if (topicId != null) params.set("topic_id", String(topicId));
+  if (eventId != null) params.set("event_id", eventId);
   const res = await fetchWithRetry(`${BASE}/api/articles?${params}`, { signal });
   return safeJson(res, { articles: [], total: 0 }, ["articles"]);
 }
@@ -44,6 +46,22 @@ export async function fetchEventSources(
 ): Promise<{ sources: ClusterSource[] }> {
   const res = await fetch(`${BASE}/api/events/${eventId}/sources`);
   return safeJson(res, { sources: [] });
+}
+
+export async function fetchEventDetail(
+  eventId: string,
+): Promise<{ event: EventDetail | null; sources: ClusterSource[] }> {
+  const res = await fetch(`${BASE}/api/events/${eventId}`);
+  return safeJson(res, { event: null, sources: [] });
+}
+
+export async function fetchChangedEvents(
+  eventIds: string[],
+): Promise<{ events: EventCluster[] }> {
+  if (!eventIds.length) return { events: [] };
+  const params = new URLSearchParams({ ids: eventIds.join(",") });
+  const res = await fetchWithRetry(`${BASE}/api/events/changed?${params}`);
+  return safeJson(res, { events: [] }, ["events"]);
 }
 
 export async function archiveEvent(eventId: string): Promise<boolean> {
@@ -155,7 +173,14 @@ export async function fetchFetchStatus(
   return safeJson(res, { running: false }, undefined, { silent: true });
 }
 
-export function createSSEConnection(onArticles: (articles: Article[]) => void) {
+export interface SSEDelta {
+  articles: Article[];
+  impacted_event_ids: string[];
+  /** Event IDs that are brand-new this fetch (not previously known) — used to auto-trigger evolution. */
+  new_event_ids: string[];
+}
+
+export function createSSEConnection(onDelta: (delta: SSEDelta) => void) {
   let closed = false;
   let evtSource: EventSource | null = null;
 
@@ -165,8 +190,18 @@ export function createSSEConnection(onArticles: (articles: Article[]) => void) {
 
     evtSource.onmessage = (event) => {
       try {
-        const articles: Article[] = JSON.parse(event.data);
-        onArticles(articles);
+        const raw = JSON.parse(event.data);
+        // New structured delta: { articles: [], impacted_event_ids: [] }
+        if (raw && typeof raw === "object" && !Array.isArray(raw) && "articles" in raw) {
+          onDelta({
+            articles: Array.isArray(raw.articles) ? raw.articles : [],
+            impacted_event_ids: Array.isArray(raw.impacted_event_ids) ? raw.impacted_event_ids : [],
+            new_event_ids: Array.isArray(raw.new_event_ids) ? raw.new_event_ids : [],
+          });
+        } else if (Array.isArray(raw)) {
+          // Legacy: plain Article[] array (backward compat)
+          onDelta({ articles: raw as Article[], impacted_event_ids: [], new_event_ids: [] });
+        }
       } catch {
         // keepalive or malformed frame
       }

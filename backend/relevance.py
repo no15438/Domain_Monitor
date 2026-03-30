@@ -327,12 +327,42 @@ _STOP = frozenset(
 )
 
 
+_CJK_RANGE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\u20000-\u2a6df\uac00-\ud7af]")
+
+
+def _has_cjk(text: str) -> bool:
+    """Return True if the text contains a significant proportion of CJK characters."""
+    cjk_chars = len(_CJK_RANGE.findall(text))
+    return cjk_chars > 0 and cjk_chars / max(len(text.replace(" ", "")), 1) > 0.2
+
+
+def _cjk_ngrams(text: str, n: int = 2) -> set[str]:
+    """Extract character n-grams from CJK text for overlap computation.
+
+    Non-CJK token-length words are also included, making this work for
+    mixed Chinese/English titles like 'BYD Ultra EV 上市价格公布'.
+    """
+    grams: set[str] = set()
+    # ASCII-ish space-separated tokens
+    for token in text.split():
+        if not _CJK_RANGE.search(token):
+            if len(token) >= 3 and token not in _STOP:
+                grams.add(token)
+    # CJK bigrams across the whole string (spaces stripped)
+    cjk_only = "".join(_CJK_RANGE.findall(text))
+    for i in range(len(cjk_only) - n + 1):
+        grams.add(cjk_only[i:i + n])
+    return grams
+
+
 def _significant_words(text: str) -> set[str]:
+    if _has_cjk(text):
+        return _cjk_ngrams(text)
     return {w for w in text.split() if len(w) >= 3 and w not in _STOP}
 
 
 def _title_similarity(a: str, b: str) -> float:
-    """Combined metric: max of SequenceMatcher ratio and word overlap coefficient."""
+    """Combined metric: max of SequenceMatcher ratio and word/ngram overlap coefficient."""
     seq_sim = SequenceMatcher(None, a, b).ratio()
 
     words_a = _significant_words(a)
