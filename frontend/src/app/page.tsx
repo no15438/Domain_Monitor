@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Radar, Plus, X, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2, Plus, Radar, RefreshCw, X } from "lucide-react";
+import ThemeToggle from "@/components/ThemeToggle";
 import TopicCard from "@/components/TopicCard";
 import {
   fetchTopicsOverview,
+  fetchArchivedTopicsOverview,
   createTopic,
   type TopicOverview,
 } from "@/lib/api";
@@ -16,36 +18,69 @@ const COLORS = TOPIC_COLORS;
 
 export default function Home() {
   const [topics, setTopics] = useState<TopicOverview[]>([]);
+  const [archivedTopics, setArchivedTopics] = useState<TopicOverview[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [createStep, setCreateStep] = useState<"form" | "confirm">("form");
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(COLORS[0]);
   const addToast = useStore((s) => s.addToast);
 
-  useEffect(() => {
-    fetchTopicsOverview(24)
-      .then((d) => { setTopics(d.topics); })
-      .catch((e) => { if (process.env.NODE_ENV === "development") console.warn("[fetch]", e); })
-      .finally(() => setLoading(false));
+  const loadTopics = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [data, archived] = await Promise.all([
+        fetchTopicsOverview(24),
+        fetchArchivedTopicsOverview(24),
+      ]);
+      setTopics(data.topics);
+      setArchivedTopics(archived.topics);
+    } catch (e) {
+      if (process.env.NODE_ENV === "development") console.warn("[fetch]", e);
+      setLoadError("Failed to load topics. Please retry.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  async function handleCreate() {
+  useEffect(() => {
+    void loadTopics();
+  }, [loadTopics]);
+
+  async function handleCreateConfirmed() {
     const name = newName.trim();
     if (!name) return;
     try {
       const result = await createTopic(name, newColor);
       if (result.status === "error") {
-        addToast("Failed to create topic — please try again", "error");
+        addToast(
+          result.message === "Topic already exists"
+            ? "A topic with this name already exists. Choose another name, restore an archived one, or delete the existing topic."
+            : "Failed to create topic — please try again",
+          "error",
+        );
         return;
       }
       setNewName("");
       setCreating(false);
-      const d = await fetchTopicsOverview(24);
-      setTopics(d.topics);
+      setCreateStep("form");
+      await loadTopics();
     } catch (e) {
       if (process.env.NODE_ENV === "development") console.warn("[create-topic]", e);
       addToast("Failed to create topic — please try again", "error");
     }
+  }
+
+  function openCreateForm() {
+    setCreateStep("form");
+    setCreating(true);
+  }
+
+  function closeCreateForm() {
+    setCreating(false);
+    setCreateStep("form");
   }
 
   function handleUpdated(id: number, patch: { name?: string; color?: string }) {
@@ -56,6 +91,16 @@ export default function Home() {
 
   function handleDeleted(id: number) {
     setTopics((prev) => prev.filter((t) => t.id !== id));
+    setArchivedTopics((prev) => prev.filter((t) => t.id !== id));
+    void loadTopics();
+  }
+
+  function handleArchived() {
+    void loadTopics();
+  }
+
+  function handleRestored() {
+    void loadTopics();
   }
 
   return (
@@ -67,6 +112,8 @@ export default function Home() {
           <h1 className="text-lg font-semibold tracking-tight">Domain Monitor</h1>
           <p className="text-[11px] text-muted">AI-powered industry intelligence</p>
         </div>
+        <div className="flex-1" />
+        <ThemeToggle />
       </header>
 
       {/* Content */}
@@ -78,7 +125,7 @@ export default function Home() {
             </h2>
             {!creating && (
               <button
-                onClick={() => setCreating(true)}
+                onClick={openCreateForm}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -96,44 +143,84 @@ export default function Home() {
                 exit={{ opacity: 0, height: 0 }}
                 className="overflow-hidden mb-6"
               >
-                <form
-                  onSubmit={(e) => { e.preventDefault(); handleCreate(); }}
-                  className="flex items-center gap-3 p-4 rounded-xl border border-accent/30 bg-accent/5"
-                >
-                  <div className="flex gap-1">
-                    {COLORS.map((c) => (
+                {createStep === "form" ? (
+                  <div className="flex flex-col gap-3 p-4 rounded-xl border border-accent/30 bg-accent/5">
+                    <p className="text-xs text-muted">New topic — choose a name and color.</p>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div className="flex gap-1">
+                        {COLORS.map((c) => (
+                          <button
+                            type="button"
+                            key={c}
+                            onClick={() => setNewColor(c)}
+                            className={`w-5 h-5 rounded-full transition-transform ${
+                              newColor === c ? "scale-125 ring-2 ring-white" : "opacity-50 hover:opacity-100"
+                            }`}
+                            style={{ backgroundColor: c }}
+                          />
+                        ))}
+                      </div>
+                      <input
+                        autoFocus
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                        placeholder="Topic name (e.g. AI Agents, Cybersecurity)…"
+                        className="flex-1 min-w-48 px-3 py-2 rounded-lg text-sm bg-background border border-border focus:border-accent outline-none"
+                      />
                       <button
                         type="button"
-                        key={c}
-                        onClick={() => setNewColor(c)}
-                        className={`w-5 h-5 rounded-full transition-transform ${
-                          newColor === c ? "scale-125 ring-2 ring-white" : "opacity-50 hover:opacity-100"
-                        }`}
-                        style={{ backgroundColor: c }}
-                      />
-                    ))}
+                        disabled={!newName.trim()}
+                        onClick={() => {
+                          if (!newName.trim()) return;
+                          setCreateStep("confirm");
+                        }}
+                        className="px-4 py-2 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-40"
+                      >
+                        Continue
+                      </button>
+                      <button
+                        type="button"
+                        onClick={closeCreateForm}
+                        className="p-1.5 text-muted hover:text-foreground"
+                        aria-label="Close"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                  <input
-                    autoFocus
-                    value={newName}
-                    onChange={(e) => setNewName(e.target.value)}
-                    placeholder="Topic name (e.g. AI Agents, Cybersecurity)…"
-                    className="flex-1 px-3 py-2 rounded-lg text-sm bg-background border border-border focus:border-accent outline-none"
-                  />
-                  <button
-                    type="submit"
-                    className="px-4 py-2 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover"
-                  >
-                    Create
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setCreating(false)}
-                    className="p-1.5 text-muted hover:text-foreground"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </form>
+                ) : (
+                  <div className="flex flex-col gap-3 p-4 rounded-xl border border-border bg-surface">
+                    <p className="text-sm font-medium">
+                      Create topic <span className="text-foreground">"{newName.trim()}"</span>?
+                    </p>
+                    <p className="text-xs text-muted">
+                      You can archive it later to hide it from this list, or delete it permanently to remove all data.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleCreateConfirmed()}
+                        className="px-4 py-2 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover"
+                      >
+                        Create topic
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCreateStep("form")}
+                        className="px-4 py-2 rounded-lg text-xs font-medium border border-border text-muted hover:text-foreground hover:bg-surface-hover"
+                      >
+                        Back
+                      </button>
+                      <button
+                        type="button"
+                        onClick={closeCreateForm}
+                        className="px-4 py-2 rounded-lg text-xs font-medium text-muted hover:text-foreground"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -145,8 +232,23 @@ export default function Home() {
             </div>
           )}
 
+          {!loading && loadError && (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-surface px-6 py-12 text-center">
+              <AlertTriangle className="mb-3 h-8 w-8 text-important" />
+              <h3 className="mb-2 text-lg font-semibold">Topics unavailable</h3>
+              <p className="mb-4 max-w-md text-sm text-muted">{loadError}</p>
+              <button
+                onClick={() => void loadTopics()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-accent-hover"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Retry
+              </button>
+            </div>
+          )}
+
           {/* Empty state */}
-          {!loading && topics.length === 0 && (
+          {!loading && !loadError && topics.length === 0 && archivedTopics.length === 0 && (
             <div className="flex flex-col items-center justify-center py-20 text-center">
               <Radar className="w-16 h-16 text-muted/30 mb-4" />
               <h3 className="text-lg font-semibold mb-2">No topics yet</h3>
@@ -155,7 +257,7 @@ export default function Home() {
                 Each topic tracks keywords, collects news, and generates AI insights.
               </p>
               <button
-                onClick={() => setCreating(true)}
+                onClick={openCreateForm}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium bg-accent text-white hover:bg-accent-hover transition-colors"
               >
                 <Plus className="w-4 h-4" />
@@ -164,8 +266,14 @@ export default function Home() {
             </div>
           )}
 
+          {!loading && !loadError && topics.length === 0 && archivedTopics.length > 0 && (
+            <p className="text-sm text-muted mb-6">
+              No active topics. Restore one from the archive below, or create a new topic.
+            </p>
+          )}
+
           {/* Topic cards grid */}
-          {!loading && topics.length > 0 && (
+          {!loading && !loadError && topics.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {topics.map((topic, i) => (
                 <motion.div
@@ -177,12 +285,44 @@ export default function Home() {
                 >
                   <TopicCard
                     topic={topic}
+                    variant="active"
                     onUpdated={handleUpdated}
                     onDeleted={handleDeleted}
+                    onArchived={handleArchived}
                   />
                 </motion.div>
               ))}
             </div>
+          )}
+
+          {!loading && !loadError && archivedTopics.length > 0 && (
+            <section className="mt-10 pt-8 border-t border-border">
+              <h2 className="text-sm font-semibold text-muted uppercase tracking-wider mb-4">
+                Archived topics
+              </h2>
+              <p className="text-xs text-muted mb-4 max-w-xl">
+                Archived topics stay in the database but do not appear above. Restore one to resume monitoring, or delete permanently to free the name.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {archivedTopics.map((topic, i) => (
+                  <motion.div
+                    key={topic.id}
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.04 }}
+                    layout
+                  >
+                    <TopicCard
+                      topic={topic}
+                      variant="archived"
+                      onUpdated={handleUpdated}
+                      onDeleted={handleDeleted}
+                      onRestored={handleRestored}
+                    />
+                  </motion.div>
+                ))}
+              </div>
+            </section>
           )}
         </div>
       </main>

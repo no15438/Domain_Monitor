@@ -1,13 +1,7 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import ToastContainer from "@/components/ToastContainer";
-
-const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+import { ThemeProvider } from "@/components/ThemeProvider";
 
 export const metadata: Metadata = {
   title: "Domain Monitor — AI Industry Intelligence",
@@ -20,11 +14,14 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
+      className="h-full antialiased"
     >
       <body className="h-full">
-        {children}
-        <ToastContainer />
+        <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem>
+          {children}
+          <ToastContainer />
+        </ThemeProvider>
       </body>
     </html>
   );
