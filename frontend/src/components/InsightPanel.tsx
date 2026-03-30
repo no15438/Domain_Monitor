@@ -185,9 +185,9 @@ export default function InsightPanel() {
           <InsightCard title="Coverage">
             <div className="space-y-2">
               {summaryData.top_events.slice(0, 4).map((ev, i) => (
-                <div key={`${ev.event_id || ev.id || ''}-${i}`} className="flex items-center gap-2">
+                <div key={`${ev.id || ''}-${i}`} className="flex items-center gap-2">
                   <span className="shrink-0 w-5 h-5 rounded-full bg-accent/10 text-accent text-[10px] font-bold flex items-center justify-center">
-                    {ev.event_size}
+                    {ev.source_count ?? 1}
                   </span>
                   <p className="text-[10px] leading-snug line-clamp-1 flex-1">
                     {ev.title}

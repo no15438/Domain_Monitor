@@ -217,12 +217,52 @@ export interface CachedSummary {
   stats_metadata?: string | null;
 }
 
+// ── Event cluster (聚类事件实体) ──────────────────────────
+// Returned by /api/events. Represents a cluster of articles about the same event,
+// backed by events_v2 (when available) joined with the canonical article.
+
+export interface EventSource {
+  id: string;
+  title: string;
+  source: string;
+  url: string;
+  published_at: string | null;
+  source_score: number;
+  source_type: string;
+  is_canonical: number;
+}
+
+export interface EventCluster {
+  id: string;                             // events_v2.id or articles.event_id
+  topic_id: number | null;
+  title: string;                          // event-level title (falls back to canonical article title)
+  summary: string;                        // event-level summary (falls back to canonical article summary)
+  status: "active" | "archived";         // driven by canonical article status
+  event_status: string;                   // knowledge-lifecycle status from events_v2
+  canonical_article_id: string | null;
+  canonical_url: string | null;
+  canonical_source: string | null;
+  source_type: string | null;
+  source_score: number;
+  sentiment: "positive" | "negative" | "neutral";
+  importance: number;
+  tags: string;
+  is_kept: number;
+  published_at: string | null;
+  created_at: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  stability_score: number;
+  fact_confidence: number;
+  source_count: number;                   // total articles in this cluster
+}
+
 export interface InsightSummary {
   total_articles: number;
   important_count: number;
   source_distribution: Record<string, number>;
   sentiment_distribution: Record<string, number>;
-  top_events: Article[];
+  top_events: EventCluster[];
 }
 
 export interface TopicInsight {

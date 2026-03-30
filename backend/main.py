@@ -31,6 +31,12 @@ from database import (
     add_topic_feed,
     remove_topic_feed,
     get_insight_summary,
+    get_event_clusters,
+    get_event_sources,
+    archive_event_cluster,
+    restore_event_cluster,
+    delete_event_cluster,
+    toggle_event_kept,
     get_events_grouped,
     get_event_alternatives,
     get_topic_insights,
@@ -439,21 +445,59 @@ async def api_topic_insights(topic_id: Optional[int] = None, window: str = "24h"
 
 
 @app.get("/api/events")
-async def api_list_events(topic_id: Optional[int] = None, limit: int = 30, offset: int = 0, sort: str = "relevance", status: str = "active"):
+async def api_list_events(
+    topic_id: Optional[int] = None,
+    limit: int = 30,
+    offset: int = 0,
+    sort: str = "relevance",
+    status: str = "active",
+):
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
     if status not in {"active", "archived"}:
         status = "active"
     if sort not in {"relevance", "latest"}:
         sort = "relevance"
-    events, total = await asyncio.to_thread(get_events_grouped, topic_id, limit, offset, sort, status)
+    events, total = await asyncio.to_thread(get_event_clusters, topic_id, limit, offset, sort, status)
     return {"events": events, "total": total}
+
+
+@app.get("/api/events/{event_id}/sources")
+async def api_event_sources(event_id: str):
+    sources = await asyncio.to_thread(get_event_sources, event_id)
+    return {"sources": sources}
+
+
+@app.put("/api/events/{event_id}/archive")
+async def api_archive_event(event_id: str):
+    await asyncio.to_thread(archive_event_cluster, event_id)
+    return {"status": "archived"}
+
+
+@app.put("/api/events/{event_id}/restore")
+async def api_restore_event(event_id: str):
+    await asyncio.to_thread(restore_event_cluster, event_id)
+    return {"status": "restored"}
+
+
+@app.delete("/api/events/{event_id}")
+async def api_delete_event(event_id: str):
+    await asyncio.to_thread(delete_event_cluster, event_id)
+    return {"status": "deleted"}
+
+
+@app.put("/api/events/{event_id}/keep")
+async def api_toggle_event_kept(event_id: str, body: dict):
+    is_kept = int(bool(body.get("is_kept", 0)))
+    await asyncio.to_thread(toggle_event_kept, event_id, is_kept)
+    return {"is_kept": is_kept}
 
 
 @app.get("/api/events/{event_id}")
 async def api_event_detail(event_id: str):
-    articles = await asyncio.to_thread(get_event_alternatives, event_id)
-    return {"articles": articles}
+    """Legacy: return sources for this event cluster."""
+    sources = await asyncio.to_thread(get_event_sources, event_id)
+    return {"sources": sources, "articles": sources}
 
 
 # ── Manual fetch ──────────────────────────────────────

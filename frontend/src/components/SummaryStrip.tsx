@@ -13,7 +13,8 @@ import {
   Layers,
 } from "lucide-react";
 import { useStore } from "@/stores/useStore";
-import { fetchInsightSummary, type InsightSummary, type Article } from "@/lib/api";
+import { fetchInsightSummary, type InsightSummary, type EventCluster } from "@/lib/api";
+import { parseTags } from "@/lib/utils";
 
 const EMPTY: InsightSummary = {
   total_articles: 0,
@@ -22,14 +23,6 @@ const EMPTY: InsightSummary = {
   sentiment_distribution: {},
   top_events: [],
 };
-
-function parseTags(tags: string): string[] {
-  try {
-    return JSON.parse(tags);
-  } catch {
-    return [];
-  }
-}
 
 const sentimentIcon = {
   positive: TrendingUp,
@@ -51,10 +44,14 @@ export default function SummaryStrip() {
   const setHighlightedEventId = useStore((s) => s.setHighlightedEventId);
 
   useEffect(() => {
-    fetchInsightSummary(activeTopicId, 24).then(setData).catch((e) => { if (process.env.NODE_ENV === "development") console.warn("[fetch]", e); });
+    fetchInsightSummary(activeTopicId, 24)
+      .then(setData)
+      .catch((e) => {
+        if (process.env.NODE_ENV === "development") console.warn("[fetch]", e);
+      });
   }, [activeTopicId, refreshKey]);
 
-  function handleEventClick(eventId: string | null) {
+  function handleEventClick(eventId: string) {
     const next = selectedEventId === eventId ? null : eventId;
     setSelectedEventId(next);
     setHighlightedEventId(next);
@@ -109,11 +106,11 @@ export default function SummaryStrip() {
         <div className="flex gap-3 px-5 pb-3 overflow-x-auto">
           {topEvents.map((ev, i) => (
             <TopEventCard
-              key={ev.event_id || ev.id}
-              article={ev}
+              key={ev.id}
+              event={ev}
               rank={i + 1}
-              isSelected={selectedEventId === (ev.event_id || ev.id)}
-              onClick={() => handleEventClick(ev.event_id || ev.id)}
+              isSelected={selectedEventId === ev.id}
+              onClick={() => handleEventClick(ev.id)}
             />
           ))}
         </div>
@@ -147,20 +144,20 @@ function StatBadge({
 }
 
 function TopEventCard({
-  article,
+  event,
   rank,
   isSelected,
   onClick,
 }: {
-  article: Article;
+  event: EventCluster;
   rank: number;
   isSelected: boolean;
   onClick: () => void;
 }) {
-  const sentiment = (article.sentiment || "neutral") as keyof typeof sentimentIcon;
+  const sentiment = (event.sentiment || "neutral") as keyof typeof sentimentIcon;
   const SIcon = sentimentIcon[sentiment] ?? Minus;
   const sColor = sentimentColor[sentiment] ?? "text-muted";
-  const tags = parseTags(article.tags).slice(0, 2);
+  const tags = parseTags(event.tags).slice(0, 2);
 
   return (
     <motion.button
@@ -178,28 +175,28 @@ function TopEventCard({
           {rank}
         </span>
         <SIcon className={`w-3 h-3 ${sColor}`} />
-        {article.event_size > 1 && (
+        {event.source_count > 1 && (
           <span className="inline-flex items-center gap-0.5 text-[10px] text-accent">
             <Layers className="w-3 h-3" />
-            {article.event_size}
+            {event.source_count}
           </span>
         )}
-        {article.source_score > 0 && (
+        {event.source_score > 0 && (
           <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-400">
             <Shield className="w-3 h-3" />
-            {(article.source_score * 100).toFixed(0)}
+            {(event.source_score * 100).toFixed(0)}
           </span>
         )}
         <span className="ml-auto text-[9px] text-muted truncate max-w-[60px]">
-          {article.source || "web"}
+          {event.canonical_source || "web"}
         </span>
       </div>
       <p className="text-xs font-medium leading-snug line-clamp-2 mb-1">
-        {article.title}
+        {event.title}
       </p>
-      {article.summary && (
+      {event.summary && (
         <p className="text-[10px] text-muted leading-relaxed line-clamp-1">
-          {article.summary}
+          {event.summary}
         </p>
       )}
       {tags.length > 0 && (

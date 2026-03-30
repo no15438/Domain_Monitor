@@ -1607,12 +1607,38 @@ def get_insight_summary(topic_id=None, hours=24):
     sentiment_dist = {r["sentiment"]: r["cnt"] for r in sentiment_rows}
 
     top_events = conn.execute(
-        f"""SELECT event_id, title, summary, source, url, importance, event_size,
-                   source_score, source_breakdown, sentiment, tags, source_type, created_at, published_at
-            FROM articles {base_where} {time_filter} AND is_canonical = 1
-            ORDER BY event_size DESC,
-                     (importance * EXP(-0.023 * MAX(julianday('now') - julianday(COALESCE(published_at, created_at)), 0))) DESC,
-                     source_score DESC
+        f"""SELECT
+                COALESCE(e.id, a.event_id, a.id)                              AS id,
+                a.topic_id,
+                COALESCE(e.title, a.title)                                     AS title,
+                COALESCE(NULLIF(e.summary, ''), a.summary, '')                 AS summary,
+                COALESCE(a.status, 'active')                                   AS status,
+                COALESCE(e.status, 'active')                                   AS event_status,
+                COALESCE(e.canonical_article_id, a.id)                         AS canonical_article_id,
+                a.url                                                           AS canonical_url,
+                a.source                                                        AS canonical_source,
+                a.source_type,
+                COALESCE(a.source_score, 0)                                    AS source_score,
+                COALESCE(a.sentiment, 'neutral')                               AS sentiment,
+                COALESCE(a.importance, 5)                                       AS importance,
+                COALESCE(a.tags, '[]')                                          AS tags,
+                COALESCE(a.is_kept, 0)                                          AS is_kept,
+                a.published_at,
+                a.created_at,
+                COALESCE(e.first_seen_at, a.published_at, a.created_at)        AS first_seen_at,
+                COALESCE(e.last_seen_at, a.published_at, a.created_at)         AS last_seen_at,
+                COALESCE(e.stability_score, 0)                                  AS stability_score,
+                COALESCE(e.fact_confidence, 0)                                  AS fact_confidence,
+                (SELECT COUNT(*) FROM articles sub
+                 WHERE sub.event_id = COALESCE(e.id, a.event_id)
+                   AND sub.event_id IS NOT NULL
+                   AND sub.event_id != '')                                       AS source_count
+            FROM articles a
+            LEFT JOIN events_v2 e ON e.id = a.event_id
+            {base_where} {time_filter} AND a.is_canonical = 1
+            ORDER BY source_count DESC,
+                     (a.importance * EXP(-0.023 * MAX(julianday('now') - julianday(COALESCE(a.published_at, a.created_at)), 0))) DESC,
+                     a.source_score DESC
             LIMIT 5""",
         params_with_time,
     ).fetchall()
@@ -1627,33 +1653,71 @@ def get_insight_summary(topic_id=None, hours=24):
     }
 
 
-def get_events_grouped(topic_id=None, limit=30, offset=0, sort="relevance", status="active"):
-    """Return canonical articles grouped by event_id, with alternatives count."""
+def get_event_clusters(topic_id=None, limit=30, offset=0, sort="relevance", status="active"):
+    """Return event-level DTO list by joining events_v2 with canonical articles.
+
+    Falls back gracefully to article-derived fields when no events_v2 entry exists,
+    so existing data from before the events_v2 migration still appears correctly.
+    """
     conn = _conn()
-    base_where = "WHERE is_canonical = 1"
-    params: list = []
+
+    where_parts = [
+        "a.is_canonical = 1",
+        "COALESCE(a.status, 'active') = ?",
+    ]
+    params: list = [status]
 
     if topic_id is not None:
-        base_where += " AND topic_id = ?"
+        where_parts.append("a.topic_id = ?")
         params.append(topic_id)
 
-    if status:
-        base_where += " AND COALESCE(status, 'active') = ?"
-        params.append(status)
+    where = "WHERE " + " AND ".join(where_parts)
 
     order = (
-        "ORDER BY (importance * EXP(-0.023 * MAX(julianday('now') - julianday(COALESCE(published_at, created_at)), 0))) DESC, event_size DESC, COALESCE(published_at, created_at) DESC"
+        "ORDER BY (COALESCE(a.importance, 5) * EXP(-0.023 * MAX(julianday('now') - julianday(COALESCE(a.published_at, a.created_at)), 0))) DESC, source_count DESC, COALESCE(a.published_at, a.created_at) DESC"
         if sort == "relevance"
-        else "ORDER BY COALESCE(published_at, created_at) DESC"
+        else "ORDER BY COALESCE(a.published_at, a.created_at) DESC"
     )
 
     rows = conn.execute(
-        f"SELECT * FROM articles {base_where} {order} LIMIT ? OFFSET ?",
+        f"""
+        SELECT
+            COALESCE(e.id, a.event_id, a.id)                              AS id,
+            a.topic_id,
+            COALESCE(e.title, a.title)                                     AS title,
+            COALESCE(NULLIF(e.summary, ''), a.summary, '')                 AS summary,
+            COALESCE(a.status, 'active')                                   AS status,
+            COALESCE(e.status, 'active')                                   AS event_status,
+            COALESCE(e.canonical_article_id, a.id)                         AS canonical_article_id,
+            a.url                                                           AS canonical_url,
+            a.source                                                        AS canonical_source,
+            a.source_type,
+            COALESCE(a.source_score, 0)                                    AS source_score,
+            COALESCE(a.sentiment, 'neutral')                               AS sentiment,
+            COALESCE(a.importance, 5)                                      AS importance,
+            COALESCE(a.tags, '[]')                                         AS tags,
+            COALESCE(a.is_kept, 0)                                         AS is_kept,
+            a.published_at,
+            a.created_at,
+            COALESCE(e.first_seen_at, a.published_at, a.created_at)        AS first_seen_at,
+            COALESCE(e.last_seen_at, a.published_at, a.created_at)         AS last_seen_at,
+            COALESCE(e.stability_score, 0)                                 AS stability_score,
+            COALESCE(e.fact_confidence, 0)                                 AS fact_confidence,
+            (SELECT COUNT(*) FROM articles sub
+             WHERE sub.event_id = COALESCE(e.id, a.event_id)
+               AND sub.event_id IS NOT NULL
+               AND sub.event_id != '')                                      AS source_count
+        FROM articles a
+        LEFT JOIN events_v2 e ON e.id = a.event_id
+        {where}
+        {order}
+        LIMIT ? OFFSET ?
+        """,
         params + [limit, offset],
     ).fetchall()
 
     total = conn.execute(
-        f"SELECT COUNT(*) FROM articles {base_where}",
+        f"SELECT COUNT(*) FROM articles a {where}",
         params,
     ).fetchone()[0]
 
@@ -1661,8 +1725,72 @@ def get_events_grouped(topic_id=None, limit=30, offset=0, sort="relevance", stat
     return [dict(r) for r in rows], total
 
 
+def get_event_sources(event_id: str) -> list[dict]:
+    """Return all articles belonging to this event cluster, ordered canonical-first."""
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT id, title, source, url, published_at, source_score, source_type, is_canonical
+           FROM articles
+           WHERE event_id = ?
+           ORDER BY is_canonical DESC, source_score DESC""",
+        (event_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def archive_event_cluster(event_id: str):
+    """Archive the canonical article of this event cluster."""
+    conn = _conn()
+    conn.execute(
+        "UPDATE articles SET status = 'archived' WHERE event_id = ? AND is_canonical = 1",
+        (event_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def restore_event_cluster(event_id: str):
+    """Restore the canonical article of this event cluster."""
+    conn = _conn()
+    conn.execute(
+        "UPDATE articles SET status = 'active' WHERE event_id = ? AND is_canonical = 1",
+        (event_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_event_cluster(event_id: str):
+    """Delete all articles in this cluster and the events_v2 entry."""
+    conn = _conn()
+    conn.execute("DELETE FROM articles WHERE event_id = ?", (event_id,))
+    conn.execute("DELETE FROM events_v2 WHERE id = ?", (event_id,))
+    conn.commit()
+    conn.close()
+
+
+def toggle_event_kept(event_id: str, is_kept: int):
+    """Toggle is_kept on the canonical article of this event cluster."""
+    conn = _conn()
+    conn.execute(
+        "UPDATE articles SET is_kept = ? WHERE event_id = ? AND is_canonical = 1",
+        (is_kept, event_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ── Legacy helpers (kept for backward compatibility) ───────────────────────────
+
+
+def get_events_grouped(topic_id=None, limit=30, offset=0, sort="relevance", status="active"):
+    """Deprecated: use get_event_clusters(). Returns canonical articles as event proxies."""
+    return get_event_clusters(topic_id=topic_id, limit=limit, offset=offset, sort=sort, status=status)
+
+
 def get_event_alternatives(event_id: str):
-    """Return all articles sharing the same event_id."""
+    """Return non-canonical articles sharing the same event_id."""
     conn = _conn()
     rows = conn.execute(
         "SELECT * FROM articles WHERE event_id = ? AND is_canonical = 0 ORDER BY source_score DESC",

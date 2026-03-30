@@ -1,5 +1,5 @@
 import { BASE, fetchWithRetry, safeJson } from "./shared";
-import type { Article } from "./types";
+import type { Article, EventCluster, EventSource } from "./types";
 
 export async function fetchArticles(
   limit = 50,
@@ -27,7 +27,7 @@ export async function fetchEvents(
   sort: "relevance" | "latest" = "relevance",
   status: "active" | "archived" = "active",
   signal?: AbortSignal,
-): Promise<{ events: Article[]; total: number }> {
+): Promise<{ events: EventCluster[]; total: number }> {
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String(offset),
@@ -39,11 +39,38 @@ export async function fetchEvents(
   return safeJson(res, { events: [], total: 0 }, ["events"]);
 }
 
-export async function fetchEventAlternatives(
+export async function fetchEventSources(
   eventId: string,
-): Promise<{ articles: Article[] }> {
-  const res = await fetch(`${BASE}/api/events/${eventId}`);
-  return safeJson(res, { articles: [] });
+): Promise<{ sources: EventSource[] }> {
+  const res = await fetch(`${BASE}/api/events/${eventId}/sources`);
+  return safeJson(res, { sources: [] });
+}
+
+export async function archiveEvent(eventId: string): Promise<boolean> {
+  const res = await fetch(`${BASE}/api/events/${eventId}/archive`, { method: "PUT" });
+  return res.ok;
+}
+
+export async function restoreEvent(eventId: string): Promise<boolean> {
+  const res = await fetch(`${BASE}/api/events/${eventId}/restore`, { method: "PUT" });
+  return res.ok;
+}
+
+export async function deleteEvent(eventId: string): Promise<boolean> {
+  const res = await fetch(`${BASE}/api/events/${eventId}`, { method: "DELETE" });
+  return res.ok;
+}
+
+export async function toggleEventKept(
+  eventId: string,
+  isKept: boolean,
+): Promise<boolean> {
+  const res = await fetch(`${BASE}/api/events/${eventId}/keep`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ is_kept: isKept ? 1 : 0 }),
+  });
+  return res.ok;
 }
 
 export async function toggleArticleKept(

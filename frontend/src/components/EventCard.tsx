@@ -10,24 +10,30 @@ import {
   ChevronDown,
   ChevronUp,
   Bookmark,
+  Globe,
 } from "lucide-react";
-import type { Article } from "@/lib/api";
-import { fetchEventAlternatives } from "@/lib/api";
+import type { EventCluster, EventSource } from "@/lib/api";
+import {
+  fetchEventSources,
+  archiveEvent,
+  restoreEvent,
+  deleteEvent,
+  toggleEventKept,
+} from "@/lib/api";
 import { useStore } from "@/stores/useStore";
-import ArticleContextMenu from "./ArticleContextMenu";
 import { effectiveImportance, parseTags } from "@/lib/utils";
 import { IMPORTANCE_THRESHOLD } from "@/lib/constants";
 import { shouldShowTrackingPin, sentimentConfig } from "./contentCardShared";
 
 export default function EventCard({
-  article,
+  event,
   isNew,
   isHighlighted,
   onRemoved,
   onArchived,
   onRestored,
 }: {
-  article: Article;
+  event: EventCluster;
   isNew?: boolean;
   isHighlighted?: boolean;
   onRemoved?: (id: string) => void;
@@ -36,42 +42,92 @@ export default function EventCard({
 }) {
   const setSelectedArticle = useStore((s) => s.setSelectedArticle);
   const setChatOpen = useStore((s) => s.setChatOpen);
-  const [curSentiment, setCurSentiment] = useState(article.sentiment);
-  const [curImportance, setCurImportance] = useState(article.importance);
-  const [isKept, setIsKept] = useState(!!article.is_kept);
+
+  const [curSentiment, setCurSentiment] = useState(event.sentiment);
+  const [curImportance, setCurImportance] = useState(event.importance);
+  const [isKept, setIsKept] = useState(!!event.is_kept);
+
   const sentiment = sentimentConfig[curSentiment] ?? sentimentConfig.neutral;
   const SentimentIcon = sentiment.icon;
-  const tags = parseTags(article.tags);
-  const effImp = effectiveImportance(curImportance, article.published_at ?? article.created_at);
+  const tags = parseTags(event.tags);
+  const effImp = effectiveImportance(
+    curImportance,
+    event.published_at ?? event.created_at ?? event.first_seen_at ?? "",
+  );
   const isImportant = effImp >= IMPORTANCE_THRESHOLD;
-  const hasAlternatives = article.event_size > 1 && !!article.event_id;
-  const isArchived = article.status === "archived";
+  const hasMultipleSources = event.source_count > 1;
+  const isArchived = event.status === "archived";
   const showTrackingPin = shouldShowTrackingPin(isKept);
 
   const [expanded, setExpanded] = useState(false);
-  const [alternatives, setAlternatives] = useState<Article[]>([]);
-  const [loadingAlt, setLoadingAlt] = useState(false);
+  const [sources, setSources] = useState<EventSource[]>([]);
+  const [loadingSources, setLoadingSources] = useState(false);
 
-  // Context menu
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [ctxVisible, setCtxVisible] = useState(false);
 
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setCtxMenu({ x: e.clientX, y: e.clientY });
-  };
-
-  async function toggleAlternatives() {
+  async function toggleSources() {
     if (expanded) {
       setExpanded(false);
       return;
     }
-    if (alternatives.length === 0 && article.event_id) {
-      setLoadingAlt(true);
-      const data = await fetchEventAlternatives(article.event_id);
-      setAlternatives(data.articles.filter((a) => a.id !== article.id));
-      setLoadingAlt(false);
+    if (sources.length === 0) {
+      setLoadingSources(true);
+      const data = await fetchEventSources(event.id);
+      setSources(data.sources.filter((s) => s.is_canonical === 0));
+      setLoadingSources(false);
     }
     setExpanded(true);
+  }
+
+  async function handleArchive() {
+    await archiveEvent(event.id);
+    onArchived?.(event.id);
+  }
+
+  async function handleRestore() {
+    await restoreEvent(event.id);
+    onRestored?.(event.id);
+  }
+
+  async function handleDelete() {
+    await deleteEvent(event.id);
+    onRemoved?.(event.id);
+  }
+
+  async function handleToggleKept() {
+    const next = !isKept;
+    setIsKept(next);
+    await toggleEventKept(event.id, next);
+  }
+
+  function handleAskAI() {
+    // Pass a minimal Article-shaped object so the chatbot can reference this event
+    setSelectedArticle({
+      id: event.canonical_article_id ?? event.id,
+      title: event.title,
+      summary: event.summary,
+      content: "",
+      source: event.canonical_source ?? "",
+      url: event.canonical_url ?? "",
+      tags: event.tags,
+      sentiment: event.sentiment,
+      importance: event.importance,
+      source_type: event.source_type ?? "",
+      topic_id: event.topic_id,
+      published_at: event.published_at ?? "",
+      created_at: event.created_at ?? "",
+      event_id: event.id,
+      is_canonical: 1,
+      event_size: event.source_count,
+      source_score: event.source_score,
+      source_breakdown: "",
+      topic_relevance: 0,
+      key_entities: "",
+      topic_analysis: "",
+      is_kept: event.is_kept,
+      status: event.status,
+    });
+    setChatOpen(true);
   }
 
   return (
@@ -79,7 +135,6 @@ export default function EventCard({
       initial={{ opacity: 0, y: -20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
-      onContextMenu={handleContextMenu}
       className={`group relative rounded-xl shadow-sm hover:shadow-md transition-all border ${
         isArchived
           ? "border-border/50 bg-surface/50 opacity-70"
@@ -89,9 +144,11 @@ export default function EventCard({
               ? "border-important/40 bg-important/5 hover:border-important/60"
               : "border-border bg-surface hover:border-accent/40"
       }`}
+      onContextMenu={(e) => { e.preventDefault(); setCtxVisible(true); }}
+      onClick={() => ctxVisible && setCtxVisible(false)}
     >
       <div className="p-4">
-        {/* badges row */}
+        {/* Badges row */}
         <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
           {isNew && (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-accent text-white animate-pulse">
@@ -114,29 +171,30 @@ export default function EventCard({
             <SentimentIcon className="w-3 h-3" />
             {curSentiment}
           </span>
-          {article.event_size > 1 && (
+          {event.source_count > 0 && (
             <span
               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-accent/10 text-accent"
-              title={`${article.event_size} sources report this event`}
+              title={`${event.source_count} source${event.source_count !== 1 ? "s" : ""} cover this event`}
             >
               <Layers className="w-3 h-3" />
-              {article.event_size}
+              {event.source_count}
             </span>
           )}
-          {article.source_score > 0 && (
+          {event.source_score > 0 && (
             <span
               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-              title={`Source quality: ${(article.source_score * 100).toFixed(0)}%`}
+              title={`Source quality: ${(event.source_score * 100).toFixed(0)}%`}
             >
               <Shield className="w-3 h-3" />
-              {(article.source_score * 100).toFixed(0)}
+              {(event.source_score * 100).toFixed(0)}
             </span>
           )}
-          {article.source_type && article.source_type !== "search" && (
+          {event.source_type && event.source_type !== "search" && (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface-hover text-muted uppercase">
-              {article.source_type}
+              {event.source_type}
             </span>
           )}
+
           {(showTrackingPin && !isArchived) || isKept ? (
             <div className="ml-auto flex items-center gap-1.5 shrink-0">
               {showTrackingPin && !isArchived && (
@@ -151,35 +209,35 @@ export default function EventCard({
           ) : null}
         </div>
 
-        {/* Date line */}
+        {/* Time window */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mb-2 text-[10px] text-muted">
-          {article.published_at && (
+          {event.first_seen_at && (
             <span className="whitespace-nowrap">
-              <span className="uppercase tracking-wide font-medium mr-1">Published</span>
-              {article.published_at.slice(0, 16)}
+              <span className="uppercase tracking-wide font-medium mr-1">First seen</span>
+              {event.first_seen_at.slice(0, 16)}
             </span>
           )}
-          {article.created_at && (
+          {event.last_seen_at && event.last_seen_at !== event.first_seen_at && (
             <span className="whitespace-nowrap">
-              <span className="uppercase tracking-wide font-medium mr-1">Fetched</span>
-              {article.created_at.slice(0, 16)}
+              <span className="uppercase tracking-wide font-medium mr-1">Last seen</span>
+              {event.last_seen_at.slice(0, 16)}
             </span>
           )}
         </div>
 
-        {/* title */}
+        {/* Event title */}
         <h3 className="text-sm font-semibold leading-snug mb-1.5 line-clamp-2">
-          {article.title}
+          {event.title}
         </h3>
 
-        {/* summary */}
-        {article.summary && (
+        {/* Event summary */}
+        {event.summary && (
           <p className="text-xs text-muted leading-relaxed mb-2 line-clamp-2">
-            {article.summary}
+            {event.summary}
           </p>
         )}
 
-        {/* tags */}
+        {/* Tags */}
         {tags.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-2">
             {tags.slice(0, 4).map((tag) => (
@@ -193,18 +251,19 @@ export default function EventCard({
           </div>
         )}
 
-        {/* actions row */}
+        {/* Action row */}
         <div className="flex flex-wrap items-center gap-1.5">
           <button
-            onClick={() => { setSelectedArticle(article); setChatOpen(true); }}
+            onClick={handleAskAI}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-accent/10 text-accent-hover hover:bg-accent/20 transition-colors"
           >
             <Sparkles className="w-3 h-3" />
             Ask AI
           </button>
-          {article.url && (
+
+          {event.canonical_url && (
             <a
-              href={article.url}
+              href={event.canonical_url}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-muted hover:text-foreground transition-colors"
@@ -213,9 +272,10 @@ export default function EventCard({
               Source
             </a>
           )}
-          {hasAlternatives && (
+
+          {hasMultipleSources && (
             <button
-              onClick={toggleAlternatives}
+              onClick={toggleSources}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-muted hover:text-foreground transition-colors"
             >
               {expanded ? (
@@ -223,16 +283,52 @@ export default function EventCard({
               ) : (
                 <ChevronDown className="w-3 h-3" />
               )}
-              {article.event_size - 1} more source{article.event_size > 2 ? "s" : ""}
+              {event.source_count - 1} more source{event.source_count > 2 ? "s" : ""}
             </button>
           )}
-          <span className="ml-auto shrink-0 text-[10px] text-muted truncate max-w-[40%]" title={article.source || "web"}>
-            {article.source || "web"}
-          </span>
+
+          {/* Context actions */}
+          <div className="ml-auto flex items-center gap-1 shrink-0">
+            <button
+              onClick={handleToggleKept}
+              className="p-1 rounded text-muted hover:text-accent transition-colors"
+              title={isKept ? "Unpin" : "Pin for tracking"}
+            >
+              <Bookmark className={`w-3.5 h-3.5 ${isKept ? "fill-accent/30 text-accent" : ""}`} />
+            </button>
+            {!isArchived ? (
+              <button
+                onClick={handleArchive}
+                className="p-1 rounded text-[10px] text-muted hover:text-foreground transition-colors"
+                title="Archive event"
+              >
+                Archive
+              </button>
+            ) : (
+              <button
+                onClick={handleRestore}
+                className="p-1 rounded text-[10px] text-muted hover:text-foreground transition-colors"
+                title="Restore event"
+              >
+                Restore
+              </button>
+            )}
+            <button
+              onClick={handleDelete}
+              className="p-1 rounded text-[10px] text-muted hover:text-negative transition-colors"
+              title="Delete event"
+            >
+              Delete
+            </button>
+            <span className="text-[10px] text-muted truncate max-w-[40%]" title={event.canonical_source || "web"}>
+              <Globe className="w-3 h-3 inline-block mr-0.5 opacity-50" />
+              {event.canonical_source || "web"}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Alternatives (expanded) */}
+      {/* Sources (expanded) */}
       <AnimatePresence>
         {expanded && (
           <motion.div
@@ -242,65 +338,46 @@ export default function EventCard({
             className="overflow-hidden border-t border-border bg-surface-hover/30"
           >
             <div className="px-4 py-2 space-y-2">
-              {loadingAlt ? (
-                <p className="text-[10px] text-muted py-2">Loading sources...</p>
-              ) : alternatives.length === 0 ? (
-                <p className="text-[10px] text-muted py-2">No alternative sources found.</p>
+              {loadingSources ? (
+                <p className="text-[10px] text-muted py-2">Loading sources…</p>
+              ) : sources.length === 0 ? (
+                <p className="text-[10px] text-muted py-2">No additional sources found.</p>
               ) : (
-                alternatives.map((alt) => (
-                  <AlternativeRow key={alt.id} article={alt} />
-                ))
+                sources.map((src) => <SourceRow key={src.id} source={src} />)
               )}
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-
-      {/* Context menu */}
-      {ctxMenu && (
-        <ArticleContextMenu
-          x={ctxMenu.x}
-          y={ctxMenu.y}
-          article={article}
-          sentiment={curSentiment}
-          importance={curImportance}
-          isKept={isKept}
-          onClose={() => setCtxMenu(null)}
-          onSentimentChange={setCurSentiment}
-          onImportanceChange={setCurImportance}
-          onKeptChange={setIsKept}
-          onArchived={() => onArchived?.(article.id)}
-          onRestored={() => onRestored?.(article.id)}
-          onDeleted={() => onRemoved?.(article.id)}
-        />
-      )}
     </motion.div>
   );
 }
 
-function AlternativeRow({ article }: { article: Article }) {
+function SourceRow({ source }: { source: EventSource }) {
   return (
     <div className="flex items-center gap-2 py-1.5 border-b border-border/50 last:border-0">
       <div className="flex-1 min-w-0">
         <p className="text-[11px] font-medium leading-snug line-clamp-1">
-          {article.title}
+          {source.title}
         </p>
         <div className="flex items-center gap-2 mt-0.5">
-          <span className="text-[9px] text-muted">{article.source || "web"}</span>
-          {article.source_score > 0 && (
+          <span className="text-[9px] text-muted">{source.source || "web"}</span>
+          {source.source_score > 0 && (
             <span className="text-[9px] text-emerald-400">
-              score {(article.source_score * 100).toFixed(0)}
+              score {(source.source_score * 100).toFixed(0)}
             </span>
           )}
-          <span className="text-[9px] text-muted">{article.source_type}</span>
+          <span className="text-[9px] text-muted">{source.source_type}</span>
         </div>
       </div>
-      {article.published_at && (
-        <span className="shrink-0 text-[9px] text-muted whitespace-nowrap">{article.published_at.slice(0, 16)}</span>
+      {source.published_at && (
+        <span className="shrink-0 text-[9px] text-muted whitespace-nowrap">
+          {source.published_at.slice(0, 16)}
+        </span>
       )}
-      {article.url && (
+      {source.url && (
         <a
-          href={article.url}
+          href={source.url}
           target="_blank"
           rel="noopener noreferrer"
           className="shrink-0 p-1 text-muted hover:text-foreground"
