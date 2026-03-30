@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { Article, Keyword, Topic, EventCluster } from "@/lib/api";
+import type { AnalysisCitation, Article, Keyword, Topic, EventCluster } from "@/lib/api";
 import {
   fetchGlobalOverview,
   fetchGlobalOverviewStatus,
@@ -26,6 +26,7 @@ export interface Toast {
 
 export interface GlobalOverviewSlice {
   content: string;
+  citations?: AnalysisCitation[];
   isGenerating: boolean;
   lastStatus?: string;
   lastError?: string | null;
@@ -34,6 +35,7 @@ export interface GlobalOverviewSlice {
 export interface LiveSummarySlice {
   content: string;
   generatedAt: string | null;
+  citations?: AnalysisCitation[];
   isGenerating: boolean;
   lastStatus?: string;
   lastError?: string | null;
@@ -302,12 +304,14 @@ export const useStore = create<AppState>()(
         ]);
         const content = data.content ?? "";
         const generatedAt = data.generated_at ?? null;
+        const citations = data.citations ?? [];
         set((s) => ({
           liveSummaryByTopic: {
             ...s.liveSummaryByTopic,
             [topicId]: {
               content,
               generatedAt,
+              citations,
               isGenerating: st.generating,
               lastStatus: st.status,
               lastError: st.error ?? null,
@@ -340,6 +344,7 @@ export const useStore = create<AppState>()(
             [topicId]: {
               content: s.liveSummaryByTopic[topicId]?.content ?? "",
               generatedAt: s.liveSummaryByTopic[topicId]?.generatedAt ?? null,
+              citations: s.liveSummaryByTopic[topicId]?.citations ?? [],
               isGenerating: false,
               lastStatus: "error",
               lastError: "Failed to poll AI analysis status",
@@ -362,12 +367,14 @@ export const useStore = create<AppState>()(
       ]);
       const content = data.content ?? "";
       const generatedAt = data.generated_at ?? null;
+      const citations = data.citations ?? [];
       set((s) => ({
         liveSummaryByTopic: {
           ...s.liveSummaryByTopic,
           [topicId]: {
             content,
             generatedAt,
+            citations,
             isGenerating: st.generating,
             lastStatus: st.status,
             lastError: st.error ?? null,
@@ -409,6 +416,7 @@ export const useStore = create<AppState>()(
         [topicId]: {
           content: s.liveSummaryByTopic[topicId]?.content ?? "",
           generatedAt: s.liveSummaryByTopic[topicId]?.generatedAt ?? null,
+          citations: s.liveSummaryByTopic[topicId]?.citations ?? [],
           isGenerating: true,
           lastStatus: "running",
           lastError: null,
@@ -450,11 +458,13 @@ export const useStore = create<AppState>()(
           fetchGlobalOverview(topicId),
         ]);
         const content = data.content ?? "";
+        const citations = (data.citations ?? []) as AnalysisCitation[];
         set((s) => ({
           globalOverviewByTopic: {
             ...s.globalOverviewByTopic,
             [topicId]: {
               content,
+              citations,
               isGenerating: st.generating,
               lastStatus: st.status,
               lastError: st.error ?? null,
@@ -507,11 +517,13 @@ export const useStore = create<AppState>()(
         fetchGlobalOverviewStatus(topicId),
       ]);
       const content = data.content ?? "";
+      const citations = (data.citations ?? []) as AnalysisCitation[];
       set((s) => ({
         globalOverviewByTopic: {
           ...s.globalOverviewByTopic,
           [topicId]: {
             content,
+            citations,
             isGenerating: st.generating,
             lastStatus: st.status,
             lastError: st.error ?? null,

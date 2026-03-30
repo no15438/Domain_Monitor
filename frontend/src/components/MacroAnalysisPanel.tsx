@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
 import {
   AlertTriangle,
   Archive,
@@ -12,6 +11,7 @@ import {
   ChevronDown,
   ChevronUp,
   FileText,
+  GitBranch,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -29,6 +29,7 @@ import {
   type TrendingData,
   type EventCluster,
   type EventClaimSummary,
+  type SynthesisArtifact,
 } from "@/lib/api";
 import {
   fetchEvents,
@@ -36,6 +37,9 @@ import {
   archiveEvent,
   deleteEvent,
   toggleEventKept,
+  fetchEvolutionReportStatus,
+  fetchSynthesisArtifact,
+  postEvolutionReportGenerate,
 } from "@/lib/api";
 import { useStore } from "@/stores/useStore";
 import { useTopicKnowledgeData } from "@/lib/hooks/useTopicKnowledgeData";
@@ -44,6 +48,7 @@ import {
 } from "@/lib/knowledgeLabels";
 import { timeAgo } from "@/lib/utils";
 import { updateClaimStatus, deleteClaim } from "@/lib/api";
+import AnalysisRichText from "./AnalysisRichText";
 
 
 export default function MacroAnalysisPanel({
@@ -73,12 +78,24 @@ export default function MacroAnalysisPanel({
     refreshKnowledge,
   } = useTopicKnowledgeData(activeTopicId);
 
-  const globalContent = overviewArtifact?.content ?? globalSlice?.content ?? "";
+  // Prefer globalSlice (kept in sync by polling) over overviewArtifact (loaded once at mount)
+  const globalContent = (globalSlice?.content || overviewArtifact?.content) ?? "";
+  // Citations come from the slice (updated after every poll tick) or fall back to the artifact metadata
+  const globalCitations =
+    (globalSlice?.citations?.length ? globalSlice.citations : undefined) ??
+    overviewArtifact?.metadata?.citations ??
+    [];
   const globalGenerating =
     (globalSlice?.isGenerating ?? false) ||
     (activeTopicId != null &&
       getActionState(`task:global-overview:${activeTopicId}`).status === "running");
+  const evolutionActionRunning =
+    activeTopicId != null &&
+    getActionState(`task:evolution-report:${activeTopicId}`).status === "running";
   const [expandedSnapshotIds, setExpandedSnapshotIds] = useState<number[]>([]);
+  const [evolutionArtifact, setEvolutionArtifact] = useState<SynthesisArtifact | null>(null);
+  const [evolutionGenerating, setEvolutionGenerating] = useState(false);
+  const [evolutionLoading, setEvolutionLoading] = useState(false);
 
   // Build a Map<snapshotId, SnapshotDelta> for quick lookup in the timeline
   const deltaBySnapshotId = useMemo(() => {
@@ -126,6 +143,78 @@ export default function MacroAnalysisPanel({
   }, [activeTopicId, refreshKey]);
 
   useEffect(() => {
+    if (activeTopicId == null) {
+      setEvolutionArtifact(null);
+      setEvolutionGenerating(false);
+      setEvolutionLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setEvolutionLoading(true);
+    Promise.all([
+      fetchSynthesisArtifact(activeTopicId, "evolution-report"),
+      fetchEvolutionReportStatus(activeTopicId),
+    ])
+      .then(([artifact, status]) => {
+        if (cancelled) return;
+        setEvolutionArtifact(artifact);
+        setEvolutionGenerating(status.generating);
+        if (!status.generating) {
+          useStore
+            .getState()
+            .endAction(
+              `task:evolution-report:${activeTopicId}`,
+              status.status === "error" ? "error" : "success",
+              status.error ?? null,
+              status.result_summary ?? null,
+            );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setEvolutionGenerating(false);
+      })
+      .finally(() => {
+        if (!cancelled) setEvolutionLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTopicId, refreshKey]);
+
+  useEffect(() => {
+    if (activeTopicId == null || !evolutionGenerating) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      void Promise.all([
+        fetchEvolutionReportStatus(activeTopicId),
+        fetchSynthesisArtifact(activeTopicId, "evolution-report"),
+      ])
+        .then(([status, artifact]) => {
+          if (cancelled) return;
+          setEvolutionGenerating(status.generating);
+          if (artifact) setEvolutionArtifact(artifact);
+          if (!status.generating) {
+            useStore
+              .getState()
+              .endAction(
+                `task:evolution-report:${activeTopicId}`,
+                status.status === "error" ? "error" : "success",
+                status.error ?? null,
+                status.result_summary ?? null,
+              );
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setEvolutionGenerating(false);
+        });
+    }, 1800);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [activeTopicId, evolutionGenerating]);
+
+  useEffect(() => {
     if (activeTopicId == null) return;
     void hydrateGlobalOverview(activeTopicId);
   }, [activeTopicId, hydrateGlobalOverview]);
@@ -133,6 +222,23 @@ export default function MacroAnalysisPanel({
   const handleGenerate = () => {
     if (activeTopicId == null || globalGenerating) return;
     void startGlobalOverviewGeneration(activeTopicId);
+  };
+
+  const handleGenerateEvolution = () => {
+    if (activeTopicId == null || evolutionGenerating) return;
+    // Reset any stale persisted action state before starting
+    useStore.getState().beginAction(`task:evolution-report:${activeTopicId}`);
+    setEvolutionGenerating(true);
+    void postEvolutionReportGenerate(activeTopicId).catch(() => {
+      useStore
+        .getState()
+        .endAction(
+          `task:evolution-report:${activeTopicId}`,
+          "error",
+          "Failed to start evolution report generation",
+        );
+      setEvolutionGenerating(false);
+    });
   };
 
   const toggleSnapshot = (snapshotId: number) => {
@@ -441,17 +547,25 @@ export default function MacroAnalysisPanel({
                           </p>
                           {(claimsCache[ev.id] ?? []).map((claim) => {
                             const effectiveStatus = claim.lifecycle_status ?? claim.status;
+                            const staleness = claim.staleness_status ?? "fresh";
+                            const isSuperseded = effectiveStatus === "superseded" || effectiveStatus === "inactive" || staleness === "replaced";
                             const isPendingDeleteClaim = pendingDeleteClaimId === claim.id;
                             const isUpdating = updatingClaimId === claim.id;
                             return (
                               <div
                                 key={claim.id}
-                                className="rounded-md border border-border/40 bg-surface/80 p-2 space-y-0.5"
+                                className={`rounded-md border p-2 space-y-0.5 transition-opacity ${
+                                  isSuperseded
+                                    ? "border-border/20 bg-surface/40 opacity-50"
+                                    : "border-border/40 bg-surface/80"
+                                }`}
                               >
-                                <p className="text-[11px] font-medium leading-snug text-foreground">
+                                <p className={`text-[11px] font-medium leading-snug ${
+                                  isSuperseded ? "text-muted line-through" : "text-foreground"
+                                }`}>
                                   {claim.statement}
                                 </p>
-                                {claim.summary && (
+                                {claim.summary && !isSuperseded && (
                                   <p className="text-[10px] text-muted leading-snug">
                                     {claim.summary}
                                   </p>
@@ -463,15 +577,17 @@ export default function MacroAnalysisPanel({
                                     </span>
                                   )}
                                   <span className={`px-1.5 py-0.5 rounded border text-[9px] ${
-                                    effectiveStatus === "active"
-                                      ? "border-green-500/30 text-green-600 bg-green-500/5"
-                                      : effectiveStatus === "stale"
-                                        ? "border-yellow-500/30 text-yellow-600 bg-yellow-500/5"
-                                        : "border-border/50 text-muted bg-surface"
+                                    isSuperseded
+                                      ? "border-border/30 text-muted/60 bg-surface"
+                                      : effectiveStatus === "active" && staleness === "fresh"
+                                        ? "border-green-500/30 text-green-600 bg-green-500/5"
+                                        : staleness === "stale" || effectiveStatus === "stale"
+                                          ? "border-yellow-500/30 text-yellow-600 bg-yellow-500/5"
+                                          : "border-border/50 text-muted bg-surface"
                                   }`}>
-                                    {getClaimStatusLabel(effectiveStatus)}
+                                    {isSuperseded ? "Superseded" : getClaimStatusLabel(effectiveStatus)}
                                   </span>
-                                  {claim.evidence_count > 0 && (
+                                  {claim.evidence_count > 1 && (
                                     <span className="text-[9px] text-muted">
                                       {claim.evidence_count} evidence
                                     </span>
@@ -550,34 +666,47 @@ export default function MacroAnalysisPanel({
         </div>
       ) : null}
 
-      {/* Global Overview */}
-      <div className="rounded-lg border border-border bg-surface shadow-sm p-3">
-        <div className="flex items-center justify-between gap-2 mb-2">
+      {/* Knowledge Overview + Evolution — merged panel */}
+      <div className="rounded-lg border border-border bg-surface shadow-sm p-3 space-y-3">
+        {/* Header row */}
+        <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-accent" />
             Knowledge Overview
           </h3>
-          <button
-            onClick={handleGenerate}
-            disabled={globalGenerating}
-            className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-hover transition-colors disabled:opacity-40"
-            title={globalContent ? "Regenerate" : "Generate global overview"}
-          >
-            <RefreshCw className={`w-3 h-3 ${globalGenerating ? "animate-spin" : ""}`} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleGenerateEvolution}
+              disabled={evolutionGenerating}
+              className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-hover transition-colors disabled:opacity-40"
+              title={evolutionArtifact?.content ? "Regenerate evolution narrative" : "Generate evolution narrative"}
+            >
+              <GitBranch
+                className={`w-3 h-3 ${evolutionGenerating ? "animate-pulse" : ""}`}
+              />
+            </button>
+            <button
+              onClick={handleGenerate}
+              disabled={globalGenerating}
+              className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-hover transition-colors disabled:opacity-40"
+              title={globalContent ? "Regenerate overview" : "Generate global overview"}
+            >
+              <RefreshCw className={`w-3 h-3 ${globalGenerating ? "animate-spin" : ""}`} />
+            </button>
+          </div>
         </div>
 
+        {/* Overview loading */}
         {globalGenerating && (
-          <div className="flex items-center gap-2 py-3">
+          <div className="flex items-center gap-2 py-1">
             <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />
             <span className="text-[10px] text-muted">Synthesizing global overview…</span>
           </div>
         )}
 
+        {/* Overview content */}
         {globalContent ? (
-          <div className="ai-summary-content text-xs">
-            <ReactMarkdown>{globalContent}</ReactMarkdown>
-          </div>
+          <AnalysisRichText content={globalContent} citations={globalCitations} />
         ) : !globalGenerating ? (
           <button
             onClick={handleGenerate}
@@ -589,6 +718,37 @@ export default function MacroAnalysisPanel({
             </span>
           </button>
         ) : null}
+
+        {/* Evolution section — always visible */}
+        <div className="border-t border-border/40" />
+        <div className="space-y-1.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted flex items-center gap-1">
+            <GitBranch className="w-3 h-3" />
+            Evolution Narrative
+          </p>
+          {(evolutionLoading || evolutionGenerating) && (
+            <div className="flex items-center gap-2 py-1">
+              <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />
+              <span className="text-[10px] text-muted">Building evolution narrative…</span>
+            </div>
+          )}
+          {evolutionArtifact?.content ? (
+            <AnalysisRichText
+              content={evolutionArtifact.content}
+              citations={evolutionArtifact.metadata?.citations}
+            />
+          ) : !evolutionGenerating && !evolutionLoading ? (
+            <button
+              onClick={handleGenerateEvolution}
+              className="w-full py-2.5 rounded-lg border border-dashed border-border text-center hover:border-accent/40 hover:bg-accent/5 transition-colors group"
+            >
+              <GitBranch className="w-3.5 h-3.5 text-muted group-hover:text-accent mx-auto mb-1" />
+              <span className="text-[10px] text-muted group-hover:text-foreground">
+                Generate Evolution Narrative
+              </span>
+            </button>
+          ) : null}
+        </div>
       </div>
 
 

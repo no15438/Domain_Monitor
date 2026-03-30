@@ -221,7 +221,18 @@ export interface SynthesisArtifact {
   status: string;
   version: number;
   generated_at: string;
+  metadata?: {
+    citations?: AnalysisCitation[];
+    [key: string]: unknown;
+  };
   sources?: { source_type: string; source_id: string }[];
+}
+
+export interface AnalysisCitation {
+  id: string;
+  type: "article" | "event";
+  title: string;
+  url: string;
 }
 
 export interface CachedSummary {
@@ -229,6 +240,7 @@ export interface CachedSummary {
   generated_at: string | null;
   snapshot_id?: number | null;
   stats_metadata?: string | null;
+  citations?: AnalysisCitation[];
 }
 
 // ── Event cluster (聚类事件实体) ──────────────────────────

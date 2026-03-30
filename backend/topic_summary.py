@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 from database import (
     get_articles,
+    get_event_card_summaries,
     get_current_claims,
     get_events_v2,
     get_insight_summary,
@@ -27,6 +28,8 @@ from database import (
 from vector_store import add_artifact_document, add_snapshot_document
 from llm_client import llm_chat_stream, llm_chat
 
+CitationItem = dict[str, str]
+
 SUMMARY_SYSTEM = """You are an expert industry analyst writing a concise executive briefing.
 
 Your task: Given a set of recent articles and stats about a monitored topic, produce a clear, actionable overview.
@@ -46,13 +49,15 @@ Classify key conclusions into: Fresh / Possibly stale / Needs verification.
 For each non-fresh item, briefly state why (timestamp gap, conflicting newer signal, weak recency evidence) and what to verify next.
 
 Rules:
-- Be specific: cite article titles or sources when relevant.
+- Be specific: cite sources when relevant.
 - Prioritize significance over completeness — pick what matters most.
 - Use clear, direct language. No filler.
 - Write in the same language as the article titles (if titles are in Chinese, write in Chinese; if English, write in English).
 - If there are very few or no articles, say so honestly and keep it short.
 - Perform an internal freshness reasoning pass before writing (recency, consistency, corroboration), but do NOT reveal hidden reasoning steps.
-- If information appears old or uncertain, lower confidence in wording and place it in Timeliness Assessment."""
+- If information appears old or uncertain, lower confidence in wording and place it in Timeliness Assessment.
+- Reflect narrative evolution in existing sections: new events appearing, old events being superseded, and claim strengthening/weakening.
+- Citation: when you state a fact supported by a source in the [Citation Catalog], append its ID inline right after the statement: e.g. "Growth slowed [E1] amid supply issues [A2]." Use square brackets only; never invent IDs."""
 
 
 def _coerce_dt(raw: str | None) -> datetime | None:
@@ -84,7 +89,153 @@ def _analysis_time_text(row: dict) -> str:
     return str(row.get("published_at") or row.get("created_at") or "")
 
 
-def _collect_stats_metadata(topic_id: int, hours: int = 24) -> dict:
+def _build_citation_catalog(topic_id: int) -> list[CitationItem]:
+    """Build a compact citation catalog for long-form analysis rendering."""
+    summary = get_insight_summary(topic_id, 168)
+    events = summary.get("top_events", [])[:8]
+    articles = get_articles(
+        limit=30, offset=0, topic_id=topic_id, sort="relevance", status="active"
+    )
+    citations: list[CitationItem] = []
+    used_urls: set[str] = set()
+    event_idx = 1
+    article_idx = 1
+
+    for event in events:
+        url = str(event.get("canonical_url") or "").strip()
+        title = str(event.get("title") or "").strip()
+        if not url or not title or url in used_urls:
+            continue
+        used_urls.add(url)
+        citations.append(
+            {
+                "id": f"E{event_idx}",
+                "type": "event",
+                "title": title,
+                "url": url,
+            }
+        )
+        event_idx += 1
+
+    for article in articles:
+        url = str(article.get("url") or "").strip()
+        title = str(article.get("title") or "").strip()
+        if not url or not title or url in used_urls:
+            continue
+        used_urls.add(url)
+        citations.append(
+            {
+                "id": f"A{article_idx}",
+                "type": "article",
+                "title": title,
+                "url": url,
+            }
+        )
+        article_idx += 1
+        if article_idx > 8:
+            break
+    return citations
+
+
+def _build_citation_prompt(citations: list[CitationItem]) -> str:
+    if not citations:
+        return ""
+    lines = ["[Citation Catalog]"]
+    for c in citations:
+        lines.append(f"  {c['id']} ({c['type']}): {c['title']}")
+    lines.append("Append the matching ID in square brackets inline after any statement it supports.")
+    return "\n".join(lines)
+
+
+def _parse_json_content(
+    raw: str,
+    catalog: list[CitationItem],
+) -> str:
+    """Try to extract 'content' from a JSON-wrapped LLM response.
+
+    If the LLM returned valid JSON with a 'content' key, extract and return it.
+    Optionally strip any citation IDs that were not in the original catalog.
+    Falls back to the raw string when parsing fails.
+    """
+    import json as _json
+
+    text = raw.strip()
+    # Strip markdown code fences that some models add around JSON
+    if text.startswith("```"):
+        lines = text.splitlines()
+        inner = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(inner).strip()
+
+    try:
+        obj = _json.loads(text)
+    except (_json.JSONDecodeError, ValueError):
+        return raw  # Not JSON — return as-is (graceful degradation)
+
+    if not isinstance(obj, dict):
+        return raw
+
+    content = obj.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return raw
+
+    # Validate cited_ids: remove inline markers not in catalog
+    valid_ids = {c["id"] for c in catalog}
+    import re as _re
+
+    def _drop_invalid(m: "_re.Match[str]") -> str:
+        cid = m.group(1)
+        return m.group(0) if cid in valid_ids else ""
+
+    content = _re.sub(r"\[([EA]\d+)\]", _drop_invalid, content)
+    return content
+
+
+def _normalize_citations(text: str, catalog: list[CitationItem]) -> str:
+    """Post-process streaming LLM output to normalise common citation format errors.
+
+    Handles:
+    - (E1) / (A2)  → [E1] / [A2]         (wrong bracket style)
+    - [e1] / [a2]  → [E1] / [A2]         (lower-case IDs)
+    - (see E1) / (Source: E1) → [E1]     (verbose reference style)
+    - Any citation ID not in catalog is removed to avoid dangling buttons.
+    """
+    import re as _re
+
+    valid_ids = {c["id"] for c in catalog}
+
+    # (E1) or (A2) with optional space
+    text = _re.sub(
+        r"\(\s*([EA]\d+)\s*\)",
+        lambda m: f"[{m.group(1).upper()}]",
+        text,
+    )
+    # (see E1) / (Source: E1) / (ref: E1)
+    text = _re.sub(
+        r"\(\s*(?:see|source|ref|cf\.?)\s*:?\s*([EA]\d+)\s*\)",
+        lambda m: f"[{m.group(1).upper()}]",
+        text,
+        flags=_re.IGNORECASE,
+    )
+    # Lower-case [e1] / [a2]
+    text = _re.sub(
+        r"\[([ea]\d+)\]",
+        lambda m: f"[{m.group(1).upper()}]",
+        text,
+    )
+    # Remove IDs that are not in the catalog
+    def _drop_invalid(m: "_re.Match[str]") -> str:
+        cid = m.group(1)
+        return m.group(0) if cid in valid_ids else ""
+
+    text = _re.sub(r"\[([EA]\d+)\]", _drop_invalid, text)
+    return text
+
+
+def _collect_stats_metadata(
+    topic_id: int,
+    hours: int = 24,
+    citations: list[CitationItem] | None = None,
+) -> dict:
     """Gather all stats metadata into a serializable dict for snapshot storage."""
     summary = get_insight_summary(topic_id, hours)
     insight = get_topic_insights(topic_id, hours)
@@ -101,6 +252,7 @@ def _collect_stats_metadata(topic_id: int, hours: int = 24) -> dict:
         "top_entities": trending["top_entities"],
         "avg_topic_relevance": trending["avg_topic_relevance"],
         "generated_utc": datetime.now(timezone.utc).isoformat(),
+        "citations": citations or [],
     }
 
 
@@ -133,6 +285,7 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
     rc = _get_topic_research_context(topic_id)
     events = get_events_v2(topic_id, status=None, limit=20)
     claims = get_current_claims(topic_id, limit=20)
+    claim_evolution = get_claim_evolution(topic_id, limit=25)
 
     parts = []
     if rc["brief"]:
@@ -188,6 +341,15 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
                     f"last_refreshed: {claim.get('last_refreshed_at', claim.get('last_validated_at', ''))} · "
                     f"updated_at: {claim.get('updated_at', '')}\n"
                     f"      {claim.get('summary', '')[:220]}"
+                )
+        if claim_evolution:
+            parts.append("\n[Claim evolution signals]")
+            for i, evo in enumerate(claim_evolution[:12], 1):
+                parts.append(
+                    f"  [Evolution-{i}] relation: {evo.get('relation_type', '?')} · "
+                    f"claim_id: {evo.get('claim_id', '')} · previous_claim_id: {evo.get('previous_claim_id', '')} · "
+                    f"time: {evo.get('created_at', '')}\n"
+                    f"      reason: {evo.get('reason', '')}"
                 )
         return "\n".join(parts), events, claims
 
@@ -367,7 +529,8 @@ def generate_topic_summary(topic_id: int, hours: int = 24):
         yield msg
         return
 
-    stats = _collect_stats_metadata(topic_id, hours)
+    citations = _build_citation_catalog(topic_id)
+    stats = _collect_stats_metadata(topic_id, hours, citations)
 
     yield {"status": "generating"}
 
@@ -378,6 +541,7 @@ def generate_topic_summary(topic_id: int, hours: int = 24):
             "content": (
                 f"Current UTC time: {datetime.now(timezone.utc).isoformat()}\n\n"
                 f"Context:\n{ctx}\n\n"
+                f"{_build_citation_prompt(citations)}\n\n"
                 "Write the executive briefing based on the above data."
             ),
         },
@@ -388,7 +552,7 @@ def generate_topic_summary(topic_id: int, hours: int = 24):
         collected.append(chunk)
         yield chunk
 
-    overview_text = "".join(collected)
+    overview_text = _normalize_citations("".join(collected), citations)
     _persist_and_vectorize(topic_id, overview_text, stats, events, claims)
 
 
@@ -400,7 +564,8 @@ def generate_summary_sync(topic_id: int, hours: int = 24) -> str:
 
     from llm_client import llm_chat
 
-    stats = _collect_stats_metadata(topic_id, hours)
+    citations = _build_citation_catalog(topic_id)
+    stats = _collect_stats_metadata(topic_id, hours, citations)
 
     messages = [
         {"role": "system", "content": SUMMARY_SYSTEM},
@@ -409,11 +574,12 @@ def generate_summary_sync(topic_id: int, hours: int = 24) -> str:
             "content": (
                 f"Current UTC time: {datetime.now(timezone.utc).isoformat()}\n\n"
                 f"Context:\n{ctx}\n\n"
+                f"{_build_citation_prompt(citations)}\n\n"
                 "Write the executive briefing based on the above data."
             ),
         },
     ]
-    result = llm_chat(messages, temperature=0.4)
+    result = _normalize_citations(llm_chat(messages, temperature=0.4), citations)
     _persist_and_vectorize(topic_id, result, stats, events, claims)
     return result
 
@@ -444,7 +610,9 @@ Rules:
 - Write in the same language as the provided titles/snapshots.
 - If data is sparse, write a shorter but still macro-level overview.
 - Perform an internal freshness reasoning pass before writing (recency, consistency, corroboration), but do NOT reveal hidden reasoning chains.
-- Prefer newer snapshots/events/claims when older evidence conflicts; explicitly down-rank stale evidence in section 5."""
+- Prefer newer snapshots/events/claims when older evidence conflicts; explicitly down-rank stale evidence in section 5.
+- Explicitly capture narrative evolution in existing sections (new events, replaced/obsolete events, claim strengthening/weakening).
+- Citation: when you state a fact supported by a source in the [Citation Catalog], append its ID inline right after the statement: e.g. "Growth slowed [E1] amid supply issues [A2]." Use square brackets only; never invent IDs."""
 
 
 def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | None]:
@@ -453,6 +621,7 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
     deltas = get_snapshot_deltas(topic_id, limit=4)
     events = get_events_v2(topic_id, status=None, limit=20)
     claims = get_current_claims(topic_id, limit=20)
+    claim_evolution = get_claim_evolution(topic_id, limit=30)
     evidence_sets = list_evidence_sets(topic_id, limit=20)
     rc = _get_topic_research_context(topic_id)
 
@@ -534,6 +703,15 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
                 f"updated_at: {claim.get('updated_at', '')}\n"
                 f"Summary: {claim.get('summary', '')}"
             )
+    if claim_evolution:
+        ctx_parts.append("=== Claim Evolution Signals ===")
+        for i, evo in enumerate(claim_evolution[:15], 1):
+            ctx_parts.append(
+                f"[Evolution-{i}] relation={evo.get('relation_type', '?')} "
+                f"claim_id={evo.get('claim_id', '')} previous_claim_id={evo.get('previous_claim_id', '')}\n"
+                f"created_at={evo.get('created_at', '')}\n"
+                f"reason={evo.get('reason', '')}"
+            )
 
     if evidence_sets:
         ctx_parts.append("=== Evidence Sets ===")
@@ -580,6 +758,7 @@ def generate_global_overview_sync(topic_id: int) -> str:
     snapshot_rows = get_temporal_snapshots(topic_id, window_type="daily", limit=5)
     delta_rows = get_snapshot_deltas(topic_id, limit=4)
     claim_rows = get_current_claims(topic_id, limit=20)
+    citations = _build_citation_catalog(topic_id)
 
     messages = [
         {"role": "system", "content": GLOBAL_OVERVIEW_SYSTEM},
@@ -588,18 +767,19 @@ def generate_global_overview_sync(topic_id: int) -> str:
             "content": (
                 f"Current UTC time: {datetime.now(timezone.utc).isoformat()}\n\n"
                 f"Context:\n{ctx}\n\n"
+                f"{_build_citation_prompt(citations)}\n\n"
                 "Write the comprehensive global overview."
             ),
         },
     ]
-    result = llm_chat(messages, temperature=0.5)
+    result = _normalize_citations(llm_chat(messages, temperature=0.5), citations)
     artifact_id = replace_synthesis_artifact(
         topic_id=topic_id,
         artifact_type="global_overview",
         title="Global Overview",
         content=result,
         status="final",
-        metadata={"source": "temporal_snapshots"},
+        metadata={"source": "temporal_snapshots", "citations": citations},
         source_snapshot_ids=[row["id"] for row in snapshot_rows],
         source_delta_ids=[row["id"] for row in delta_rows],
         source_claim_ids=[row["id"] for row in claim_rows],
@@ -626,6 +806,12 @@ Structure:
 ## 2. Strengthened Claims
 ## 3. Weakened Or Superseded Claims
 ## 4. What Changed In The Bigger Picture
+- Within these sections, describe event turnover (new events, aging/superseded events) and claim transition logic.
+
+Rules:
+- Write in the same language as the provided data.
+- Be specific about which events appeared, disappeared, or changed in significance.
+- Citation: when you state a fact supported by a source in the [Citation Catalog], append its ID inline right after the statement: e.g. "Growth slowed [E1] amid supply issues [A2]." Use square brackets only; never invent IDs.
 """
 
 
@@ -633,6 +819,13 @@ def generate_evolution_report_sync(topic_id: int) -> str:
     snapshots = get_temporal_snapshots(topic_id, window_type="daily", limit=5)
     deltas = get_snapshot_deltas(topic_id, limit=5)
     claims = get_claims_v2(topic_id, limit=20)
+    claim_evolution = get_claim_evolution(topic_id, limit=25)
+    event_rows_raw, _ = get_event_card_summaries(
+        topic_id, limit=20, offset=0, sort="relevance", status="active"
+    )
+    # get_event_card_summaries returns sqlite3.Row objects — convert to dicts
+    event_rows = [dict(r) for r in event_rows_raw]
+    citations = _build_citation_catalog(topic_id)
 
     ctx_parts: list[str] = []
     if snapshots:
@@ -644,11 +837,29 @@ def generate_evolution_report_sync(topic_id: int) -> str:
         ctx_parts.append("=== Snapshot Deltas ===")
         for delta in deltas:
             ctx_parts.append(delta.get("change_summary", ""))
+    if event_rows:
+        ctx_parts.append("=== Active Event Turnover ===")
+        for event in event_rows[:12]:
+            ctx_parts.append(
+                f"{event.get('title', '')}\n"
+                f"event_status={event.get('event_status', '?')} "
+                f"last_seen={event.get('last_seen_at', '')} "
+                f"source_count={event.get('source_count', 0)}"
+            )
     if claims:
         ctx_parts.append("=== Claims ===")
         for claim in claims[:15]:
             ctx_parts.append(
                 f"{claim['statement']}\nstatus={claim.get('status', '?')} summary={claim.get('summary', '')}"
+            )
+    if claim_evolution:
+        ctx_parts.append("=== Claim Evolution Relations ===")
+        for evo in claim_evolution[:15]:
+            ctx_parts.append(
+                f"relation={evo.get('relation_type', '?')} "
+                f"claim_id={evo.get('claim_id', '')} "
+                f"previous_claim_id={evo.get('previous_claim_id', '')} "
+                f"reason={evo.get('reason', '')}"
             )
 
     if not ctx_parts:
@@ -666,20 +877,33 @@ def generate_evolution_report_sync(topic_id: int) -> str:
                 f"  {str(art.get('summary', '') or '')[:320]}"
             )
 
-    result = llm_chat(
+    user_content = (
+        f"{_build_citation_prompt(citations)}\n\n"
+        + "\n\n".join(ctx_parts)
+    )
+    raw_llm_out = llm_chat(
         [
             {"role": "system", "content": EVOLUTION_REPORT_SYSTEM},
-            {"role": "user", "content": "\n\n".join(ctx_parts)},
+            {"role": "user", "content": user_content},
         ],
         temperature=0.4,
     )
+    # #region agent log
+    import json as _jts, time as _tts
+    try:
+        with open("/Users/no15438/Desktop/Domain_Monitor/.cursor/debug-c3cf2d.log", "a") as _f:
+            _f.write(_jts.dumps({"sessionId":"c3cf2d","hypothesisId":"H-C","location":"topic_summary.py:884","message":"evolution_llm_raw","data":{"first_300":raw_llm_out[:300],"has_h2":"##" in raw_llm_out,"length":len(raw_llm_out)},"timestamp":int(_tts.time()*1000)})+"\n")
+    except Exception:
+        pass
+    # #endregion
+    result = _normalize_citations(raw_llm_out, citations)
     artifact_id = replace_synthesis_artifact(
         topic_id=topic_id,
         artifact_type="evolution_report",
         title="Evolution Report",
         content=result,
         status="final",
-        metadata={"source": "snapshot_deltas"},
+        metadata={"source": "snapshot_deltas", "citations": citations},
         source_snapshot_ids=[row["id"] for row in snapshots],
         source_delta_ids=[row["id"] for row in deltas],
         source_claim_ids=[row["id"] for row in claims[:15]],

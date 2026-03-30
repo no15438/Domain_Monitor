@@ -777,13 +777,29 @@ async def api_topic_ai_summary(topic_id: int):
     """Return latest temporal snapshot. Returns null content if none exists yet."""
     snap = await asyncio.to_thread(get_latest_temporal_snapshot, topic_id, "daily")
     if snap:
+        stats_metadata = snap["stats_metadata"]
+        parsed_stats = {}
+        if isinstance(stats_metadata, str):
+            try:
+                parsed_stats = json.loads(stats_metadata) if stats_metadata else {}
+            except Exception:
+                parsed_stats = {}
+        elif isinstance(stats_metadata, dict):
+            parsed_stats = stats_metadata
         return {
             "content": snap["summary_text"],
             "generated_at": snap["window_end"] or snap["created_at"],
             "snapshot_id": snap["id"],
-            "stats_metadata": snap["stats_metadata"],
+            "stats_metadata": stats_metadata,
+            "citations": parsed_stats.get("citations", []),
         }
-    return {"content": None, "generated_at": None, "snapshot_id": None, "stats_metadata": None}
+    return {
+        "content": None,
+        "generated_at": None,
+        "snapshot_id": None,
+        "stats_metadata": None,
+        "citations": [],
+    }
 
 
 @app.post("/api/topics/{topic_id}/ai-summary/generate")
@@ -814,7 +830,10 @@ async def api_topic_global_overview(topic_id: int):
     """Return stored lineage synthesis overview. Returns null content if none exists yet."""
     artifact = await asyncio.to_thread(get_synthesis_artifact, topic_id, "global_overview")
     content = artifact["content"] if artifact else None
-    return {"content": content}
+    citations = []
+    if artifact and isinstance(artifact.get("metadata"), dict):
+        citations = artifact["metadata"].get("citations", [])
+    return {"content": content, "citations": citations}
 
 
 @app.post("/api/topics/{topic_id}/global-overview/generate")

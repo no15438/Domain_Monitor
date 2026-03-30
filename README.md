@@ -227,9 +227,14 @@ Multi-stage recall-then-precision pipeline:
 ### AI Analysis (Realtime Tab)
 LLM-generated narrative summary for the topic, cached and updated on demand or on schedule. Includes Notable Signals and Outlook sections.
 Time-window metrics in Signals are computed on article timeline time: `published_at` first, and fallback to `created_at` when publish time is missing.
+Long-form analysis now supports `cite` buttons for both article/event references:
+- article cite button -> opens original article URL
+- event cite button -> opens event canonical source URL
+- hover displays source title; no citation data gracefully falls back to plain markdown text
 
 ### Global Overview (Overview Tab)
 Long-term macro analysis synthesized from historical AI snapshots. Covers domain evolution, key entities, persistent themes, and trend trajectory.
+Narrative evolution (event turnover + claim strengthening/weakening/superseding) is merged into existing overview/evolution text output, not a separate narrative panel.
 
 ### AI Assistant (Chatbot)
 RAG-powered chat with:
@@ -314,6 +319,9 @@ The Realtime tab shows automated alert signals based on:
 | `GET` | `/api/topics/{id}/synthesis/global-overview` | Get Global Overview synthesis artifact |
 | `POST` | `/api/topics/{id}/synthesis/global-overview/generate` | Trigger Global Overview regeneration |
 | `GET` | `/api/topics/{id}/synthesis/global-overview/status` | Poll generation status (includes error/result fields) |
+| `GET` | `/api/topics/{id}/synthesis/evolution-report` | Get Evolution synthesis artifact |
+| `POST` | `/api/topics/{id}/synthesis/evolution-report/generate` | Trigger Evolution report regeneration |
+| `GET` | `/api/topics/{id}/synthesis/evolution-report/status` | Poll Evolution generation status |
 
 ### Knowledge Base (Snapshots)
 

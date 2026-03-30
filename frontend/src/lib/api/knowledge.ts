@@ -110,9 +110,14 @@ export async function fetchSynthesisArtifact(
 
 export async function fetchGlobalOverview(
   topicId: number,
-): Promise<{ content: string | null }> {
+): Promise<{ content: string | null; citations?: { id: string; type: string; title: string; url: string }[] }> {
   const artifact = await fetchSynthesisArtifact(topicId, "global-overview");
-  return { content: artifact?.content ?? null };
+  return {
+    content: artifact?.content ?? null,
+    citations: artifact?.metadata?.citations as
+      | { id: string; type: string; title: string; url: string }[]
+      | undefined,
+  };
 }
 
 export async function postGlobalOverviewGenerate(
@@ -198,7 +203,11 @@ export async function fetchCachedSummary(
   const res = await fetch(`${BASE}/api/topics/${topicId}/ai-summary?ts=${ts}`, {
     cache: "no-store",
   });
-  return safeJson(res, { content: null, generated_at: null }, ["content"]);
+  return safeJson(
+    res,
+    { content: null, generated_at: null, citations: [] },
+    ["content"],
+  );
 }
 
 export async function postLiveSummaryGenerate(

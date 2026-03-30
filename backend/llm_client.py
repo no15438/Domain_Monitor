@@ -54,14 +54,24 @@ def _strip_thinking(text: str) -> str:
     return _THINK_RE.sub("", text).strip()
 
 
-def llm_chat(messages: list[dict], temperature: float = 0.3) -> str:
+def llm_chat(
+    messages: list[dict],
+    temperature: float = 0.3,
+    response_format: dict | None = None,
+) -> str:
+    """Call the LLM and return the response text.
+
+    Pass response_format={"type": "json_object"} to enable JSON mode on
+    OpenAI-compatible providers.  Anthropic silently ignores this flag.
+    """
     client = _get_client()
     provider = settings.llm_provider
 
     if provider in ("openai", "lmstudio", "dashscope"):
-        resp = client.chat.completions.create(
-            model=_model(), messages=messages, temperature=temperature
-        )
+        kwargs: dict = {"model": _model(), "messages": messages, "temperature": temperature}
+        if response_format is not None:
+            kwargs["response_format"] = response_format
+        resp = client.chat.completions.create(**kwargs)
         return _strip_thinking(resp.choices[0].message.content or "")
 
     if provider == "anthropic":

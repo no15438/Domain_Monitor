@@ -94,10 +94,17 @@ Each object must have:
 - "sentiment": "positive" | "negative" | "neutral" — from this research direction's perspective
 - "importance": integer 1-10 (10 = directly addresses a key research angle)
 - "topic_relevance": float 0.0-1.0
-- "claim_kind": "observation" | "forecast" | "trend" | "structural"
 - "signal_type": short plain-language label for the evidence signal, e.g. "market signal", "policy signal", "capacity signal"
 - "key_entities": array of up to 5 relevant entities
 - "topic_analysis": 1 sentence on how the article relates to the research, same language
+- "claims": array of 2-4 key analytical claims extracted from this article. Each claim must have:
+    - "kind": "observation" | "forecast" | "trend" | "structural"
+    - "statement": a concise, self-contained claim sentence (max 160 chars), same language as article
+    - "summary": 1 sentence expanding on the statement (max 160 chars), same language as article
+  Rules for claims:
+  - Cover different analytical angles — do NOT repeat the same point with different words
+  - At least one "observation" (what happened) and one forward-looking kind ("forecast" or "trend") when the article supports it
+  - If the article only supports one clear claim, return 1 item (minimum 1, maximum 4)
 
 Return ONLY a valid JSON array. No markdown fences, no explanation."""
 
@@ -548,6 +555,14 @@ def _enrich_and_store(
         log.info("enriched batch %d (%d articles)", batch_start // BATCH_SIZE + 1, len(batch))
 
         for item, parsed in zip(batch, parsed_list):
+            # #region agent log
+            try:
+                import json as _json2, time as _time2
+                with open("/Users/no15438/Desktop/Domain_Monitor/.cursor/debug-c3cf2d.log","a") as _f2:
+                    _f2.write(_json2.dumps({"sessionId":"c3cf2d","hypothesisId":"H-B","location":"pipeline.py:557","message":"item_loop_entry","data":{"title":(item.get("title") or "")[:60]},"timestamp":int(_time2.time()*1000)})+"\n")
+            except Exception:
+                pass
+            # #endregion
             article_id = str(uuid.uuid4())
             breakdown = item.get("_source_breakdown", {})
 
@@ -638,62 +653,122 @@ def _enrich_and_store(
                 # Add to reconciliation stubs so subsequent items in same batch can match
                 recent_event_stubs.append({"id": event_id, "title": event_title, "canonical_url": article["url"]})
 
-                statement, claim_summary = _build_claim_text(item, parsed)
-                claim_key = _statement_key(statement)
-                previous_claim = claim_index.get(claim_key)
-                evidence_id = f"evidence-{event_id}"
-                claim_id = upsert_claim(
-                    topic_id=topic_id,
-                    statement=statement,
-                    claim_type=_normalize_claim_kind(parsed.get("claim_kind")),
-                    summary=claim_summary,
-                    status="active",
-                    supporting_evidence_ids=[evidence_id],
-                    decay_policy="slow" if article["importance"] >= 8 else "medium",
-                    staleness_status="fresh",
-                    metadata={
-                        "event_id": event_id,
-                        "article_id": article_id,
-                        "topic_analysis": parsed.get("topic_analysis", ""),
-                    },
-                )
-                if previous_claim:
-                    add_claim_evolution(
-                        topic_id=topic_id,
-                        claim_id=claim_id,
-                        previous_claim_id=previous_claim["id"],
-                        relation_type="strengthened",
-                        reason="new supporting evidence from fresh event coverage",
-                        metadata={"event_id": event_id, "article_id": article_id},
-                    )
-                claim_index[claim_key] = {
-                    "id": claim_id,
-                    "statement": statement,
-                }
-                if claim_id not in touched_claim_ids:
-                    touched_claim_ids.append(claim_id)
+                # Build the list of claims to store for this event.
+                # New format: parsed["claims"] is a list of {kind, statement, summary}.
+                # Fallback to old single-claim format for backward compatibility.
+                raw_claims_list = parsed.get("claims") or []
+                if not isinstance(raw_claims_list, list) or not raw_claims_list:
+                    fallback_statement, fallback_summary = _build_claim_text(item, parsed)
+                    raw_claims_list = [
+                        {
+                            "kind": parsed.get("claim_kind", "observation"),
+                            "statement": fallback_statement,
+                            "summary": fallback_summary,
+                        }
+                    ]
 
-                upsert_evidence_set(
-                    evidence_id=evidence_id,
-                    topic_id=topic_id,
-                    event_id=event_id,
-                    claim_id=claim_id,
-                    title=event_title,
-                    summary=claim_summary,
-                    evidence_type=(parsed.get("signal_type") or "market signal").strip()[:40] or "market signal",
-                    stance="supporting",
-                    confidence=min(1.0, _coerce_float(parsed.get("topic_relevance"), 0.5)),
-                    freshness_half_life=14.0 if article["importance"] >= 8 else 7.0,
-                    supporting_event_ids=[event_id],
-                    contradicting_event_ids=[],
-                    metadata={
-                        "article_id": article_id,
-                        "source": article["source"],
-                        "url": article["url"],
-                        "published_at": article["published_at"],
-                        "last_seen_at": last_seen_at,
-                    },
-                )
+                signal_type = (parsed.get("signal_type") or "market signal").strip()[:40] or "market signal"
+                claim_confidence = min(1.0, _coerce_float(parsed.get("topic_relevance"), 0.5))
+                claim_half_life = 14.0 if article["importance"] >= 8 else 7.0
+
+                # #region agent log
+                import json as _json, time as _time
+                try:
+                    with open("/Users/no15438/Desktop/Domain_Monitor/.cursor/debug-c3cf2d.log","a") as _f:
+                        _f.write(_json.dumps({"sessionId":"c3cf2d","hypothesisId":"H-A","location":"pipeline.py:666","message":"claim_loop_entry","data":{"num_claims":len(raw_claims_list),"event_id":event_id},"timestamp":int(_time.time()*1000)})+"\n")
+                except Exception:
+                    pass
+                # #endregion
+                for idx, raw_claim in enumerate(raw_claims_list[:4]):
+                    c_statement = str(raw_claim.get("statement") or "").strip()
+                    c_summary = str(raw_claim.get("summary") or parsed.get("summary") or "").strip()
+                    c_kind = _normalize_claim_kind(raw_claim.get("kind"))
+                    if not c_statement:
+                        continue
+                    if len(c_statement) > 240:
+                        c_statement = c_statement[:237].rstrip() + "..."
+                    if len(c_summary) > 240:
+                        c_summary = c_summary[:237].rstrip() + "..."
+
+                    claim_key = _statement_key(c_statement)
+                    previous_claim = claim_index.get(claim_key)
+                    evidence_id = f"evidence-{event_id}-{idx}"
+                    claim_id = upsert_claim(
+                        topic_id=topic_id,
+                        statement=c_statement,
+                        claim_type=c_kind,
+                        summary=c_summary,
+                        status="active",
+                        supporting_evidence_ids=[evidence_id],
+                        decay_policy="slow" if article["importance"] >= 8 else "medium",
+                        staleness_status="fresh",
+                        metadata={
+                            "event_id": event_id,
+                            "article_id": article_id,
+                            "topic_analysis": parsed.get("topic_analysis", ""),
+                        },
+                    )
+                    if previous_claim:
+                        add_claim_evolution(
+                            topic_id=topic_id,
+                            claim_id=claim_id,
+                            previous_claim_id=previous_claim["id"],
+                            relation_type="strengthened",
+                            reason="new supporting evidence from fresh event coverage",
+                            metadata={"event_id": event_id, "article_id": article_id},
+                        )
+                    claim_index[claim_key] = {
+                        "id": claim_id,
+                        "statement": c_statement,
+                    }
+                    if claim_id not in touched_claim_ids:
+                        touched_claim_ids.append(claim_id)
+
+                    upsert_evidence_set(
+                        evidence_id=evidence_id,
+                        topic_id=topic_id,
+                        event_id=event_id,
+                        claim_id=claim_id,
+                        title=event_title,
+                        summary=c_summary,
+                        evidence_type=signal_type,
+                        stance="supporting",
+                        confidence=claim_confidence,
+                        freshness_half_life=claim_half_life,
+                        supporting_event_ids=[event_id],
+                        contradicting_event_ids=[],
+                        metadata={
+                            "article_id": article_id,
+                            "source": article["source"],
+                            "url": article["url"],
+                            "published_at": article["published_at"],
+                            "last_seen_at": last_seen_at,
+                        },
+                    )
+
+                    add_evidence_document(
+                        evidence_id,
+                        f"{event_title}\n{c_summary}\nEvidence from {article['source']}\n{vector_text}",
+                        {
+                            "topic_id": str(topic_id),
+                            "status": "active",
+                            "claim_id": claim_id,
+                            "event_id": event_id,
+                            "title": event_title,
+                            "url": article["url"],
+                        },
+                    )
+                    add_claim_document(
+                        claim_id,
+                        f"{c_statement}\n{c_summary}\nEvent: {event_title}",
+                        {
+                            "topic_id": str(topic_id),
+                            "status": "active",
+                            "claim_type": c_kind,
+                            "event_id": event_id,
+                            "title": event_title,
+                        },
+                    )
 
                 event_source_rows = [
                     {
@@ -719,29 +794,6 @@ def _enrich_and_store(
                         "url": article["url"],
                         "last_seen_at": last_seen_at,
                         "novelty_score": str(item.get("_source_score", 0)),
-                    },
-                )
-                add_evidence_document(
-                    evidence_id,
-                    f"{event_title}\n{claim_summary}\nEvidence from {article['source']}\n{vector_text}",
-                    {
-                        "topic_id": str(topic_id),
-                        "status": "active",
-                        "claim_id": claim_id,
-                        "event_id": event_id,
-                        "title": event_title,
-                        "url": article["url"],
-                    },
-                )
-                add_claim_document(
-                    claim_id,
-                    f"{statement}\n{claim_summary}\nEvent: {event_title}",
-                    {
-                        "topic_id": str(topic_id),
-                        "status": "active",
-                        "claim_type": _normalize_claim_kind(parsed.get("claim_kind")),
-                        "event_id": event_id,
-                        "title": event_title,
                     },
                 )
 

@@ -1303,6 +1303,7 @@ def get_synthesis_artifact(topic_id: int, artifact_type: str):
         conn.close()
         return None
     artifact = dict(row)
+    artifact["metadata"] = _json_loads(artifact.get("metadata_json"), {})
     source_rows = conn.execute(
         "SELECT source_type, source_id FROM artifact_sources WHERE artifact_id = ?",
         (artifact["id"],),

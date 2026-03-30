@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
 import { GitBranch, Loader2, RefreshCw } from "lucide-react";
 import type { SnapshotDelta, SynthesisArtifact } from "@/lib/api";
+import AnalysisRichText from "./AnalysisRichText";
 
 export default function EvolutionPanel({
   deltas,
@@ -46,9 +46,10 @@ export default function EvolutionPanel({
       ) : null}
 
       {artifact?.content ? (
-        <div className="ai-summary-content text-xs">
-          <ReactMarkdown>{artifact.content}</ReactMarkdown>
-        </div>
+        <AnalysisRichText
+          content={artifact.content}
+          citations={artifact.metadata?.citations}
+        />
       ) : !generating ? (
         <p className="text-[10px] text-muted">
           No evolution report yet. Generate one after a few snapshots exist.

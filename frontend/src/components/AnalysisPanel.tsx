@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import ReactMarkdown from "react-markdown";
 import {
   Sparkles,
   RefreshCw,
@@ -26,6 +25,7 @@ import {
   type TrendingData,
 } from "@/lib/api";
 import MacroAnalysisPanel from "./MacroAnalysisPanel";
+import AnalysisRichText from "./AnalysisRichText";
 
 const EMPTY_SUMMARY: InsightSummary = {
   total_articles: 0,
@@ -61,6 +61,7 @@ export default function AnalysisPanel() {
 
   const aiText = liveSlice?.content ?? "";
   const aiGeneratedAt = liveSlice?.generatedAt ?? null;
+  const aiCitations = liveSlice?.citations ?? [];
   const isGenerating = liveSlice?.isGenerating ?? false;
 
   const activeTab = activeTopicId != null ? (analysisTabByTopic[activeTopicId] ?? "realtime") : "realtime";
@@ -164,9 +165,7 @@ export default function AnalysisPanel() {
           </div>
         )}
         {aiText && (
-          <div className="ai-summary-content text-xs">
-            <ReactMarkdown>{aiText}</ReactMarkdown>
-          </div>
+          <AnalysisRichText content={aiText} citations={aiCitations} />
         )}
         {!aiText && !isGenerating && (
           <button
