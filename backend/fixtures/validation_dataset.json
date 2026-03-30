@@ -1,0 +1,588 @@
+{
+  "topic": {
+    "name": "Validation Dataset - AI Infrastructure",
+    "color": "#0f766e",
+    "research_brief": "Track the AI infrastructure market with emphasis on GPU supply, hyperscaler capacity commitments, export-policy changes, and regional cloud workarounds.",
+    "research_config": {
+      "angles": [
+        "Capacity constraints",
+        "Export policy shifts",
+        "Regional cloud substitution",
+        "Enterprise adoption friction"
+      ],
+      "entities": [
+        "NVIDIA",
+        "AMD",
+        "Oracle Cloud",
+        "ByteBridge Cloud",
+        "US Commerce Department"
+      ],
+      "geographic_scope": [
+        "United States",
+        "Southeast Asia",
+        "Middle East"
+      ],
+      "sector_scope": [
+        "AI Infrastructure",
+        "Cloud Computing",
+        "Semiconductors"
+      ]
+    },
+    "pipeline_config": {
+      "validation_fixture": true,
+      "auto_fetch_disabled": true
+    }
+  },
+  "raw_news": [
+    {
+      "id": "validation-raw-001",
+      "article_id": "validation-article-001",
+      "url": "https://example.com/validation/export-guidance-delay",
+      "normalized_url": "https://example.com/validation/export-guidance-delay",
+      "title": "US export guidance delay gives AI chip buyers a temporary window",
+      "content": "A policy briefing indicated that tougher AI accelerator export restrictions may be delayed by roughly 90 days. Brokers said buyers interpreted the pause as a temporary planning window rather than a permanent rollback.",
+      "source": "Validation Wire",
+      "source_type": "fixture",
+      "published_at": "2026-03-03T09:00:00Z",
+      "fetched_at": "2026-03-03T09:30:00Z",
+      "novelty_score": 0.71,
+      "noise_score": 0.08,
+      "authority_score": 0.66,
+      "freshness_state": "fresh",
+      "retention_until": "2026-06-01T00:00:00Z",
+      "metadata": {
+        "region": "US",
+        "theme": "policy"
+      }
+    },
+    {
+      "id": "validation-raw-002",
+      "article_id": "validation-article-002",
+      "url": "https://example.com/validation/hyperscaler-prepay",
+      "normalized_url": "https://example.com/validation/hyperscaler-prepay",
+      "title": "Hyperscalers prepay for 2026 GPU capacity as queues extend",
+      "content": "Several hyperscalers signed prepayment agreements for 2026 GPU clusters. Integrators reported enterprise delivery windows stretching past 20 weeks, reinforcing the view that high-end accelerator supply remains tight.",
+      "source": "Validation Wire",
+      "source_type": "fixture",
+      "published_at": "2026-03-10T10:00:00Z",
+      "fetched_at": "2026-03-10T10:15:00Z",
+      "novelty_score": 0.84,
+      "noise_score": 0.06,
+      "authority_score": 0.79,
+      "freshness_state": "fresh",
+      "retention_until": "2026-06-08T00:00:00Z",
+      "metadata": {
+        "region": "Global",
+        "theme": "capacity"
+      }
+    },
+    {
+      "id": "validation-raw-003",
+      "article_id": "validation-article-003",
+      "url": "https://example.com/validation/regional-cloud-launch",
+      "normalized_url": "https://example.com/validation/regional-cloud-launch",
+      "title": "Regional cloud operators launch sovereign GPU access packages",
+      "content": "Cloud operators in Southeast Asia and the Middle East launched sovereign GPU offerings for model training and inference. Resellers said customers are increasingly buying managed cloud access instead of negotiating direct chip procurement.",
+      "source": "Validation Wire",
+      "source_type": "fixture",
+      "published_at": "2026-03-17T08:30:00Z",
+      "fetched_at": "2026-03-17T08:45:00Z",
+      "novelty_score": 0.82,
+      "noise_score": 0.05,
+      "authority_score": 0.75,
+      "freshness_state": "fresh",
+      "retention_until": "2026-06-15T00:00:00Z",
+      "metadata": {
+        "region": "Southeast Asia",
+        "theme": "regional-cloud"
+      }
+    },
+    {
+      "id": "validation-raw-004",
+      "article_id": "validation-article-004",
+      "url": "https://example.com/validation/channel-wait-times",
+      "normalized_url": "https://example.com/validation/channel-wait-times",
+      "title": "Channel partners still report 18 to 24 week wait times for top-tier GPUs",
+      "content": "A monthly distributor survey showed that top-tier GPUs still carry 18 to 24 week lead times for enterprise buyers. Secondary market prices softened slightly, but fulfillment remained inconsistent across regions.",
+      "source": "Validation Wire",
+      "source_type": "fixture",
+      "published_at": "2026-03-18T14:00:00Z",
+      "fetched_at": "2026-03-18T14:20:00Z",
+      "novelty_score": 0.63,
+      "noise_score": 0.09,
+      "authority_score": 0.68,
+      "freshness_state": "fresh",
+      "retention_until": "2026-06-16T00:00:00Z",
+      "metadata": {
+        "region": "Global",
+        "theme": "channel"
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "validation-event-001",
+      "event_key": "export-guidance-delay",
+      "title": "Export control escalation is delayed, creating a temporary planning window",
+      "summary": "Policy guidance points to a short delay in tougher controls, which weakens the thesis of an immediate demand collapse.",
+      "status": "resolved",
+      "canonical_article_id": "validation-article-001",
+      "first_seen_at": "2026-03-03T09:00:00Z",
+      "last_seen_at": "2026-03-08T12:00:00Z",
+      "novelty_window_end": "2026-03-08T12:00:00Z",
+      "stability_score": 0.58,
+      "fact_confidence": 0.67,
+      "metadata": {
+        "phase": "policy",
+        "source": "briefing"
+      },
+      "sources": [
+        {
+          "event_id": "validation-event-001",
+          "raw_news_id": "validation-raw-001",
+          "article_id": "validation-article-001",
+          "source_rank": 1,
+          "source_role": "primary",
+          "is_canonical": 1,
+          "metadata": {
+            "quote": "temporary planning window"
+          }
+        }
+      ],
+      "vector_text": "Policy event: export control escalation was delayed by roughly 90 days, creating a temporary planning window and weakening the claim that direct AI accelerator demand would collapse immediately."
+    },
+    {
+      "id": "validation-event-002",
+      "event_key": "hyperscaler-prepay-2026-capacity",
+      "title": "Hyperscalers prepay for 2026 GPU capacity as enterprise queues stay long",
+      "summary": "Prepayment contracts and long enterprise queues indicate that frontier GPU supply remains constrained into H1 2026.",
+      "status": "active",
+      "canonical_article_id": "validation-article-002",
+      "first_seen_at": "2026-03-10T10:00:00Z",
+      "last_seen_at": "2026-03-18T14:00:00Z",
+      "novelty_window_end": "2026-03-18T14:00:00Z",
+      "stability_score": 0.84,
+      "fact_confidence": 0.83,
+      "metadata": {
+        "phase": "capacity",
+        "source": "contracts"
+      },
+      "sources": [
+        {
+          "event_id": "validation-event-002",
+          "raw_news_id": "validation-raw-002",
+          "article_id": "validation-article-002",
+          "source_rank": 1,
+          "source_role": "primary",
+          "is_canonical": 1,
+          "metadata": {
+            "signal": "prepayment"
+          }
+        },
+        {
+          "event_id": "validation-event-002",
+          "raw_news_id": "validation-raw-004",
+          "article_id": "validation-article-004",
+          "source_rank": 2,
+          "source_role": "confirming",
+          "is_canonical": 0,
+          "metadata": {
+            "signal": "lead-time"
+          }
+        }
+      ],
+      "vector_text": "Capacity event: hyperscalers prepaid for 2026 clusters and distributors still report 18 to 24 week waits, reinforcing that frontier GPU supply remains constrained."
+    },
+    {
+      "id": "validation-event-003",
+      "event_key": "regional-sovereign-cloud-substitution",
+      "title": "Regional sovereign cloud offerings become a workaround for direct chip access",
+      "summary": "New regional GPU clouds give buyers another path to capacity and shift demand from direct chip purchases toward managed access.",
+      "status": "active",
+      "canonical_article_id": "validation-article-003",
+      "first_seen_at": "2026-03-17T08:30:00Z",
+      "last_seen_at": "2026-03-18T14:00:00Z",
+      "novelty_window_end": "2026-03-18T14:00:00Z",
+      "stability_score": 0.79,
+      "fact_confidence": 0.81,
+      "metadata": {
+        "phase": "regional-cloud",
+        "source": "operator-launch"
+      },
+      "sources": [
+        {
+          "event_id": "validation-event-003",
+          "raw_news_id": "validation-raw-003",
+          "article_id": "validation-article-003",
+          "source_rank": 1,
+          "source_role": "primary",
+          "is_canonical": 1,
+          "metadata": {
+            "signal": "service-launch"
+          }
+        },
+        {
+          "event_id": "validation-event-003",
+          "raw_news_id": "validation-raw-004",
+          "article_id": "validation-article-004",
+          "source_rank": 2,
+          "source_role": "supporting",
+          "is_canonical": 0,
+          "metadata": {
+            "signal": "fulfillment-friction"
+          }
+        }
+      ],
+      "vector_text": "Regional cloud event: sovereign GPU services in Southeast Asia and the Middle East are giving enterprises a workaround, shifting demand away from direct chip procurement and toward managed access."
+    }
+  ],
+  "claims": [
+    {
+      "id": "validation-claim-001",
+      "statement": "Enterprise access to frontier GPUs will remain supply constrained through H1 2026.",
+      "claim_type": "forecast",
+      "summary": "Contract prepayments and persistent lead times suggest that frontier GPU access remains tight for enterprise buyers.",
+      "status": "active",
+      "decay_policy": "slow",
+      "staleness_status": "fresh",
+      "metadata": {
+        "theme": "capacity",
+        "importance": "high"
+      },
+      "vector_text": "Claim: enterprise access to frontier GPUs remains supply constrained through H1 2026 because hyperscaler prepayments and long lead times continue to crowd out enterprise demand."
+    },
+    {
+      "id": "validation-claim-002",
+      "statement": "New export controls will immediately cut off China-linked demand for advanced accelerators.",
+      "claim_type": "forecast",
+      "summary": "This early policy claim expected an immediate shock to China-linked demand, but later evidence weakened it.",
+      "status": "active",
+      "decay_policy": "medium",
+      "staleness_status": "fresh",
+      "metadata": {
+        "theme": "policy",
+        "importance": "medium"
+      },
+      "vector_text": "Claim: tougher export controls would immediately cut off China-linked demand for advanced accelerators. Later evidence weakens this by showing delays and substitution paths."
+    },
+    {
+      "id": "validation-claim-003",
+      "statement": "Demand is being rerouted toward regional cloud access rather than direct chip shipments.",
+      "claim_type": "structural",
+      "summary": "Regional cloud offerings are absorbing some demand that might otherwise have been expressed as direct chip procurement.",
+      "status": "active",
+      "supersedes_claim_id": "validation-claim-002",
+      "decay_policy": "slow",
+      "staleness_status": "fresh",
+      "metadata": {
+        "theme": "regional-cloud",
+        "importance": "high"
+      },
+      "vector_text": "Claim: demand is increasingly rerouted through regional and sovereign cloud offerings instead of direct AI accelerator shipments, changing how the market absorbs policy and supply shocks."
+    },
+    {
+      "id": "validation-claim-004",
+      "statement": "Enterprise GPU shortages should clear within a few days.",
+      "claim_type": "forecast",
+      "summary": "An early short-lived view expected a near-term easing in GPU queues, but no fresh supporting signals arrived.",
+      "status": "active",
+      "decay_policy": "fast",
+      "staleness_status": "fresh",
+      "metadata": {
+        "theme": "capacity",
+        "importance": "low"
+      },
+      "vector_text": "Claim: enterprise GPU shortages should clear within a few days. This is a short-lived view that should become inactive if no new supporting signals appear."
+    }
+  ],
+  "claim_evolution": [
+    {
+      "claim_id": "validation-claim-001",
+      "previous_claim_id": null,
+      "relation_type": "strengthened",
+      "reason": "Week two and week three evidence both reinforced the ongoing supply constraint thesis.",
+      "metadata": {
+        "window": "week_2_to_week_3"
+      }
+    },
+    {
+      "claim_id": "validation-claim-003",
+      "previous_claim_id": "validation-claim-002",
+      "relation_type": "supersedes",
+      "reason": "Regional cloud substitution became a better explanation than immediate demand collapse.",
+      "metadata": {
+        "window": "week_2_to_week_3"
+      }
+    }
+  ],
+  "evidence_sets": [
+    {
+      "id": "validation-evidence-001",
+      "event_id": "validation-event-002",
+      "claim_id": "validation-claim-001",
+      "title": "2026 GPU prepayment contracts",
+      "summary": "Hyperscaler prepayment agreements indicate that leading-edge GPU capacity has already been partially spoken for.",
+      "evidence_type": "contract_signal",
+      "stance": "supporting",
+      "confidence": 0.86,
+      "freshness_half_life": 14,
+      "review_state": "machine_only",
+      "supporting_event_ids": [
+        "validation-event-002"
+      ],
+      "contradicting_event_ids": [],
+      "metadata": {
+        "url": "https://example.com/validation/hyperscaler-prepay",
+        "published_at": "2026-03-10T10:00:00Z"
+      },
+      "vector_text": "Evidence: hyperscaler prepayment agreements for 2026 GPU clusters support the claim that enterprise access to frontier GPUs remains supply constrained through H1 2026."
+    },
+    {
+      "id": "validation-evidence-002",
+      "event_id": "validation-event-001",
+      "claim_id": "validation-claim-002",
+      "title": "Policy briefing on export control timing",
+      "summary": "The briefing introduced uncertainty around immediate policy implementation and therefore weakened the immediate cutoff thesis.",
+      "evidence_type": "policy_signal",
+      "stance": "mixed",
+      "confidence": 0.61,
+      "freshness_half_life": 10,
+      "review_state": "machine_only",
+      "supporting_event_ids": [],
+      "contradicting_event_ids": [
+        "validation-event-001"
+      ],
+      "metadata": {
+        "url": "https://example.com/validation/export-guidance-delay",
+        "published_at": "2026-03-03T09:00:00Z"
+      },
+      "vector_text": "Evidence: the export guidance delay created uncertainty around timing, which undercuts the claim that new controls would immediately cut off China-linked accelerator demand."
+    },
+    {
+      "id": "validation-evidence-003",
+      "event_id": "validation-event-003",
+      "claim_id": "validation-claim-003",
+      "title": "Regional sovereign GPU cloud launches",
+      "summary": "Regional cloud launches show that buyers can buy managed access instead of direct chip shipments.",
+      "evidence_type": "market_signal",
+      "stance": "supporting",
+      "confidence": 0.84,
+      "freshness_half_life": 14,
+      "review_state": "machine_only",
+      "supporting_event_ids": [
+        "validation-event-003"
+      ],
+      "contradicting_event_ids": [],
+      "metadata": {
+        "url": "https://example.com/validation/regional-cloud-launch",
+        "published_at": "2026-03-17T08:30:00Z"
+      },
+      "vector_text": "Evidence: sovereign GPU cloud launches in Southeast Asia and the Middle East support the claim that demand is being rerouted toward regional cloud access rather than direct chip shipments."
+    },
+    {
+      "id": "validation-evidence-004",
+      "event_id": "validation-event-002",
+      "claim_id": "validation-claim-001",
+      "title": "Distributor wait-time survey",
+      "summary": "Distributor lead-time data confirms that queue lengths remain elevated even as secondary prices soften.",
+      "evidence_type": "channel_signal",
+      "stance": "supporting",
+      "confidence": 0.78,
+      "freshness_half_life": 7,
+      "review_state": "machine_only",
+      "supporting_event_ids": [
+        "validation-event-002"
+      ],
+      "contradicting_event_ids": [],
+      "metadata": {
+        "url": "https://example.com/validation/channel-wait-times",
+        "published_at": "2026-03-18T14:00:00Z"
+      },
+      "vector_text": "Evidence: channel surveys showing 18 to 24 week GPU wait times further support the claim that frontier GPU capacity is still supply constrained for enterprise buyers."
+    },
+    {
+      "id": "validation-evidence-005",
+      "event_id": "validation-event-001",
+      "claim_id": "validation-claim-004",
+      "title": "Short-lived queue relief rumor",
+      "summary": "An early rumor suggested that enterprise GPU queues would ease quickly, but no follow-on signal supported that view.",
+      "evidence_type": "market signal",
+      "stance": "supporting",
+      "confidence": 0.34,
+      "freshness_half_life": 3,
+      "review_state": "machine_only",
+      "supporting_event_ids": [
+        "validation-event-001"
+      ],
+      "contradicting_event_ids": [],
+      "metadata": {
+        "url": "https://example.com/validation/export-guidance-delay",
+        "published_at": "2026-02-20T09:00:00Z"
+      },
+      "vector_text": "Evidence: an early rumor hinted that enterprise GPU shortages might clear quickly, but the signal aged out without reinforcement."
+    }
+  ],
+  "snapshots": [
+    {
+      "key": "week_1",
+      "window_type": "daily",
+      "window_start": "2026-03-01T00:00:00Z",
+      "window_end": "2026-03-07T23:59:59Z",
+      "snapshot_status": "final",
+      "summary_text": "Week 1: the dominant story was policy uncertainty. The market expected tighter export controls, but a briefing suggested a delay. That softened the idea of an immediate demand cliff, while supply remained tight but not yet the headline.",
+      "stats_metadata": {
+        "generated_utc": "2026-03-07T23:59:59Z",
+        "total_articles": 1,
+        "important_count": 1,
+        "trend_delta": 1
+      },
+      "event_ids": [
+        "validation-event-001"
+      ],
+      "claim_ids": [
+        "validation-claim-002"
+      ],
+      "vector_text": "Domain analysis snapshot for AI Infrastructure on 2026-03-07. Policy uncertainty dominated. Export control escalation looked delayed, weakening the immediate demand collapse thesis."
+    },
+    {
+      "key": "week_2",
+      "window_type": "daily",
+      "window_start": "2026-03-08T00:00:00Z",
+      "window_end": "2026-03-14T23:59:59Z",
+      "snapshot_status": "final",
+      "summary_text": "Week 2: the narrative shifted from policy speculation to hard capacity signals. Hyperscaler prepayments and enterprise queue data made GPU scarcity the central theme, strengthening the supply-constraint claim.",
+      "stats_metadata": {
+        "generated_utc": "2026-03-14T23:59:59Z",
+        "total_articles": 2,
+        "important_count": 2,
+        "trend_delta": 2
+      },
+      "event_ids": [
+        "validation-event-001",
+        "validation-event-002"
+      ],
+      "claim_ids": [
+        "validation-claim-001",
+        "validation-claim-002"
+      ],
+      "vector_text": "Domain analysis snapshot for AI Infrastructure on 2026-03-14. Hard capacity signals replaced policy speculation. Prepayments and long queues strengthened the view that frontier GPU supply will stay constrained."
+    },
+    {
+      "key": "week_3",
+      "window_type": "daily",
+      "window_start": "2026-03-15T00:00:00Z",
+      "window_end": "2026-03-21T23:59:59Z",
+      "snapshot_status": "final",
+      "summary_text": "Week 3: supply constraints remained, but the bigger structural change was routing. Regional sovereign clouds emerged as a practical workaround, so the market story evolved from immediate export shock to managed access substitution.",
+      "stats_metadata": {
+        "generated_utc": "2026-03-21T23:59:59Z",
+        "total_articles": 4,
+        "important_count": 3,
+        "trend_delta": 3
+      },
+      "event_ids": [
+        "validation-event-002",
+        "validation-event-003"
+      ],
+      "claim_ids": [
+        "validation-claim-001",
+        "validation-claim-003"
+      ],
+      "vector_text": "Domain analysis snapshot for AI Infrastructure on 2026-03-21. The market still faces GPU scarcity, but regional sovereign clouds now absorb some demand. The dominant interpretation shifts from immediate export shock to cloud-based substitution."
+    }
+  ],
+  "snapshot_deltas": [
+    {
+      "from_key": "week_1",
+      "to_key": "week_2",
+      "change_summary": "The center of gravity moved from policy timing to capacity scarcity. Event 002 was new, claim 001 strengthened, and the immediate-cutoff narrative lost relative importance.",
+      "new_event_ids": [
+        "validation-event-002"
+      ],
+      "resolved_event_ids": [],
+      "strengthened_claim_ids": [
+        "validation-claim-001"
+      ],
+      "weakened_claim_ids": [
+        "validation-claim-002"
+      ],
+      "superseded_claim_ids": [],
+      "metadata": {
+        "window_type": "daily"
+      }
+    },
+    {
+      "from_key": "week_2",
+      "to_key": "week_3",
+      "change_summary": "The narrative expanded from scarcity alone to scarcity plus substitution. Event 003 was new, claim 003 superseded claim 002, and the policy-shock framing gave way to the regional-cloud workaround story.",
+      "new_event_ids": [
+        "validation-event-003"
+      ],
+      "resolved_event_ids": [
+        "validation-event-001"
+      ],
+      "strengthened_claim_ids": [
+        "validation-claim-001",
+        "validation-claim-003"
+      ],
+      "weakened_claim_ids": [
+        "validation-claim-002"
+      ],
+      "superseded_claim_ids": [
+        "validation-claim-002"
+      ],
+      "metadata": {
+        "window_type": "daily"
+      }
+    }
+  ],
+  "artifacts": [
+    {
+      "artifact_type": "global_overview",
+      "title": "Validation Global Overview",
+      "content": "The validation topic models an AI infrastructure market where two forces interact: persistent frontier GPU scarcity and the market's attempts to route around policy friction. At first, policy timing dominated discussion, but as more data arrived the more durable pattern was capacity scarcity. By the third snapshot, the system should recognize a structural shift: regional and sovereign cloud offerings are becoming a substitute path for demand that cannot be satisfied through direct chip procurement. The enduring macro conclusion is that constraints remain real, but the market adapts through cloud intermediation rather than stopping outright.",
+      "status": "final",
+      "metadata": {
+        "source": "validation_fixture"
+      },
+      "source_snapshot_keys": [
+        "week_1",
+        "week_2",
+        "week_3"
+      ],
+      "source_delta_indexes": [
+        0,
+        1
+      ],
+      "source_claim_ids": [
+        "validation-claim-001",
+        "validation-claim-003"
+      ],
+      "vector_text": "Global overview artifact: the AI infrastructure market remains supply constrained, but regional cloud intermediation is emerging as the system-level adaptation to policy and procurement friction."
+    },
+    {
+      "artifact_type": "evolution_report",
+      "title": "Validation Evolution Report",
+      "content": "Across the three validation snapshots, the topic evolves in two steps. First, the system moves away from a simplistic policy-shock interpretation because the export-control delay undermines the idea of an immediate cutoff. Second, capacity signals and regional cloud launches produce a more nuanced picture: scarcity is still strong, but demand is being re-routed. The main strengthened claim is that enterprise GPU access remains constrained. The main superseded claim is that policy alone would instantly collapse China-linked demand.",
+      "status": "final",
+      "metadata": {
+        "source": "validation_fixture"
+      },
+      "source_snapshot_keys": [
+        "week_1",
+        "week_2",
+        "week_3"
+      ],
+      "source_delta_indexes": [
+        0,
+        1
+      ],
+      "source_claim_ids": [
+        "validation-claim-001",
+        "validation-claim-002",
+        "validation-claim-003"
+      ],
+      "vector_text": "Evolution artifact: the topic moved from policy timing, to scarcity signals, to a scarcity-plus-substitution model centered on regional sovereign cloud access."
+    }
+  ]
+}

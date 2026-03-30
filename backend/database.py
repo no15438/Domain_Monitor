@@ -1,7 +1,11 @@
-import sqlite3
+import json
+import logging
 import os
+import sqlite3
+import uuid
 
 DB_PATH: str | None = None
+_log = logging.getLogger(__name__)
 
 
 def init_db(db_path: str):
@@ -87,8 +91,169 @@ def init_db(db_path: str):
         );
     """)
 
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS raw_news (
+            id TEXT PRIMARY KEY,
+            topic_id INTEGER REFERENCES topics(id),
+            article_id TEXT,
+            url TEXT NOT NULL,
+            normalized_url TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            content TEXT DEFAULT '',
+            source TEXT DEFAULT '',
+            source_type TEXT DEFAULT '',
+            published_at TEXT,
+            fetched_at TEXT DEFAULT (datetime('now')),
+            novelty_score REAL DEFAULT 0,
+            noise_score REAL DEFAULT 0,
+            authority_score REAL DEFAULT 0,
+            freshness_state TEXT DEFAULT 'hot',
+            retention_until TEXT,
+            metadata_json TEXT DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS events_v2 (
+            id TEXT PRIMARY KEY,
+            topic_id INTEGER REFERENCES topics(id),
+            event_key TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            canonical_article_id TEXT,
+            first_seen_at TEXT DEFAULT (datetime('now')),
+            last_seen_at TEXT DEFAULT (datetime('now')),
+            novelty_window_end TEXT,
+            stability_score REAL DEFAULT 0,
+            fact_confidence REAL DEFAULT 0,
+            supersedes_event_id TEXT,
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS event_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL REFERENCES events_v2(id),
+            raw_news_id TEXT REFERENCES raw_news(id),
+            article_id TEXT,
+            source_rank INTEGER DEFAULT 0,
+            source_role TEXT DEFAULT 'supporting',
+            is_canonical INTEGER DEFAULT 0,
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS evidence_sets (
+            id TEXT PRIMARY KEY,
+            topic_id INTEGER REFERENCES topics(id),
+            event_id TEXT REFERENCES events_v2(id),
+            claim_id TEXT,
+            title TEXT NOT NULL DEFAULT '',
+            summary TEXT DEFAULT '',
+            evidence_type TEXT DEFAULT 'fact',
+            stance TEXT DEFAULT 'supporting',
+            confidence REAL DEFAULT 0,
+            freshness_half_life REAL DEFAULT 7,
+            review_state TEXT DEFAULT 'machine_only',
+            supporting_event_ids TEXT DEFAULT '[]',
+            contradicting_event_ids TEXT DEFAULT '[]',
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS claims (
+            id TEXT PRIMARY KEY,
+            topic_id INTEGER REFERENCES topics(id),
+            claim_type TEXT DEFAULT 'fact',
+            statement TEXT NOT NULL,
+            summary TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            supporting_evidence_ids TEXT DEFAULT '[]',
+            supersedes_claim_id TEXT,
+            last_validated_at TEXT DEFAULT (datetime('now')),
+            decay_policy TEXT DEFAULT 'medium',
+            staleness_status TEXT DEFAULT 'fresh',
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS claim_evolution (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_id INTEGER REFERENCES topics(id),
+            claim_id TEXT NOT NULL REFERENCES claims(id),
+            previous_claim_id TEXT REFERENCES claims(id),
+            relation_type TEXT NOT NULL,
+            reason TEXT DEFAULT '',
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS temporal_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_id INTEGER REFERENCES topics(id),
+            window_type TEXT DEFAULT 'daily',
+            window_start TEXT,
+            window_end TEXT,
+            summary_text TEXT NOT NULL DEFAULT '',
+            stats_metadata TEXT NOT NULL DEFAULT '{}',
+            snapshot_status TEXT DEFAULT 'final',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS snapshot_claims (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL REFERENCES temporal_snapshots(id),
+            claim_id TEXT NOT NULL REFERENCES claims(id),
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS snapshot_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            snapshot_id INTEGER NOT NULL REFERENCES temporal_snapshots(id),
+            event_id TEXT NOT NULL REFERENCES events_v2(id),
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS snapshot_deltas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_id INTEGER REFERENCES topics(id),
+            from_snapshot_id INTEGER REFERENCES temporal_snapshots(id),
+            to_snapshot_id INTEGER REFERENCES temporal_snapshots(id),
+            change_summary TEXT NOT NULL DEFAULT '',
+            new_event_ids TEXT DEFAULT '[]',
+            resolved_event_ids TEXT DEFAULT '[]',
+            strengthened_claim_ids TEXT DEFAULT '[]',
+            weakened_claim_ids TEXT DEFAULT '[]',
+            superseded_claim_ids TEXT DEFAULT '[]',
+            metadata_json TEXT DEFAULT '{}',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS synthesis_artifacts (
+            id TEXT PRIMARY KEY,
+            topic_id INTEGER REFERENCES topics(id),
+            artifact_type TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL DEFAULT '',
+            status TEXT DEFAULT 'final',
+            version INTEGER DEFAULT 1,
+            metadata_json TEXT DEFAULT '{}',
+            generated_at TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS artifact_sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            artifact_id TEXT NOT NULL REFERENCES synthesis_artifacts(id),
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+    """)
+
     _migrate_topic_summaries_to_snapshots(conn)
     _migrate_articles_event_fields(conn)
+    _migrate_lineage_tables(conn)
 
     conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_articles_topic_id ON articles(topic_id);
@@ -99,6 +264,21 @@ def init_db(db_path: str):
         CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles(published_at DESC);
         CREATE INDEX IF NOT EXISTS idx_keywords_topic_id ON keywords(topic_id);
         CREATE INDEX IF NOT EXISTS idx_feeds_topic_id ON topic_feeds(topic_id);
+        CREATE INDEX IF NOT EXISTS idx_raw_news_topic_fetch ON raw_news(topic_id, fetched_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_raw_news_normalized_url ON raw_news(normalized_url);
+        CREATE INDEX IF NOT EXISTS idx_events_v2_topic_status_seen ON events_v2(topic_id, status, last_seen_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_events_v2_event_key ON events_v2(topic_id, event_key);
+        CREATE INDEX IF NOT EXISTS idx_event_sources_event_id ON event_sources(event_id);
+        CREATE INDEX IF NOT EXISTS idx_evidence_sets_topic_event ON evidence_sets(topic_id, event_id);
+        CREATE INDEX IF NOT EXISTS idx_claims_topic_status_validated ON claims(topic_id, status, last_validated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_claims_statement ON claims(topic_id, statement);
+        CREATE INDEX IF NOT EXISTS idx_claim_evolution_claim_id ON claim_evolution(claim_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_temporal_snapshots_topic_window ON temporal_snapshots(topic_id, window_type, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_snapshot_claims_snapshot_id ON snapshot_claims(snapshot_id);
+        CREATE INDEX IF NOT EXISTS idx_snapshot_events_snapshot_id ON snapshot_events(snapshot_id);
+        CREATE INDEX IF NOT EXISTS idx_snapshot_deltas_topic_to_snapshot ON snapshot_deltas(topic_id, to_snapshot_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_synthesis_artifacts_topic_type ON synthesis_artifacts(topic_id, artifact_type, generated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_artifact_sources_artifact_id ON artifact_sources(artifact_id, source_type, source_id);
     """)
 
     conn.commit()
@@ -138,11 +318,22 @@ def _migrate_articles_event_fields(conn):
             conn.execute(f"ALTER TABLE articles ADD COLUMN {col_name} {col_def}")
         except Exception:
             pass
+
+
+def _migrate_lineage_tables(conn):
+    for col_name, col_def in [
+        ("created_at", "TEXT DEFAULT (datetime('now'))"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE events_v2 ADD COLUMN {col_name} {col_def}")
+        except Exception:
+            pass
     for tcol, tdef in [
         ("global_overview", "TEXT"),
         ("research_brief", "TEXT DEFAULT ''"),
         ("research_config", "TEXT DEFAULT '{}'"),
         ("pipeline_config", "TEXT DEFAULT '{}'"),
+        ("archived_at", "TEXT"),
     ]:
         try:
             conn.execute(f"ALTER TABLE topics ADD COLUMN {tcol} {tdef}")
@@ -176,7 +367,9 @@ def update_topic_global_overview(topic_id: int, content: str):
 def get_topics():
     conn = _conn()
     rows = conn.execute(
-        "SELECT * FROM topics WHERE is_active = 1 ORDER BY created_at"
+        """SELECT * FROM topics
+           WHERE is_active = 1 AND archived_at IS NULL
+           ORDER BY created_at"""
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -184,6 +377,24 @@ def get_topics():
 
 def create_topic(name: str, color: str = "#6366f1"):
     conn = _conn()
+    existing = conn.execute(
+        "SELECT id, is_active, archived_at FROM topics WHERE name = ?",
+        (name,),
+    ).fetchone()
+    if existing:
+        active = bool(existing["is_active"])
+        archived = bool(existing["archived_at"])
+        if active and not archived:
+            conn.close()
+            return None
+        tid = existing["id"]
+        conn.execute(
+            "UPDATE topics SET is_active = 1, archived_at = NULL, color = ? WHERE id = ?",
+            (color, tid),
+        )
+        conn.commit()
+        conn.close()
+        return tid
     try:
         cur = conn.execute(
             "INSERT INTO topics (name, color) VALUES (?, ?)", (name, color)
@@ -220,12 +431,94 @@ def update_topic(
     conn.close()
 
 
-def delete_topic(topic_id: int):
+def archive_topic(topic_id: int):
     conn = _conn()
-    conn.execute("UPDATE topics SET is_active = 0 WHERE id = ?", (topic_id,))
-    conn.execute("UPDATE keywords SET is_active = 0 WHERE topic_id = ?", (topic_id,))
+    conn.execute(
+        "UPDATE topics SET archived_at = datetime('now') WHERE id = ? AND is_active = 1",
+        (topic_id,),
+    )
     conn.commit()
     conn.close()
+
+
+def unarchive_topic(topic_id: int):
+    conn = _conn()
+    conn.execute(
+        "UPDATE topics SET archived_at = NULL WHERE id = ? AND is_active = 1",
+        (topic_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_topic(topic_id: int):
+    """Permanently remove the topic and all dependent rows (SQLite + Chroma)."""
+    tid = (topic_id,)
+    conn = _conn()
+    try:
+        conn.execute(
+            "DELETE FROM artifact_sources WHERE artifact_id IN "
+            "(SELECT id FROM synthesis_artifacts WHERE topic_id = ?)",
+            tid,
+        )
+        conn.execute("DELETE FROM synthesis_artifacts WHERE topic_id = ?", tid)
+        conn.execute("DELETE FROM snapshot_deltas WHERE topic_id = ?", tid)
+        conn.execute(
+            "DELETE FROM snapshot_claims WHERE snapshot_id IN "
+            "(SELECT id FROM temporal_snapshots WHERE topic_id = ?)",
+            tid,
+        )
+        conn.execute(
+            "DELETE FROM snapshot_events WHERE snapshot_id IN "
+            "(SELECT id FROM temporal_snapshots WHERE topic_id = ?)",
+            tid,
+        )
+        conn.execute("DELETE FROM temporal_snapshots WHERE topic_id = ?", tid)
+        conn.execute("DELETE FROM claim_evolution WHERE topic_id = ?", tid)
+        conn.execute("DELETE FROM evidence_sets WHERE topic_id = ?", tid)
+        conn.execute(
+            "UPDATE events_v2 SET supersedes_event_id = NULL WHERE topic_id = ?", tid
+        )
+        conn.execute(
+            "DELETE FROM event_sources WHERE event_id IN "
+            "(SELECT id FROM events_v2 WHERE topic_id = ?)",
+            tid,
+        )
+        conn.execute("DELETE FROM events_v2 WHERE topic_id = ?", tid)
+        conn.execute(
+            "UPDATE claims SET supersedes_claim_id = NULL WHERE topic_id = ?", tid
+        )
+        conn.execute("DELETE FROM claims WHERE topic_id = ?", tid)
+        conn.execute("DELETE FROM raw_news WHERE topic_id = ?", tid)
+        conn.execute("DELETE FROM articles WHERE topic_id = ?", tid)
+        conn.execute("DELETE FROM topic_feeds WHERE topic_id = ?", tid)
+        conn.execute("DELETE FROM keywords WHERE topic_id = ?", tid)
+        conn.execute("DELETE FROM topic_snapshots WHERE topic_id = ?", tid)
+        conn.execute(
+            "DELETE FROM topic_links WHERE source_topic_id = ? OR target_topic_id = ?",
+            (topic_id, topic_id),
+        )
+        for key in (
+            f"global-{topic_id}",
+            f"live-{topic_id}",
+            f"evolution-{topic_id}",
+            f"fetch-{topic_id}",
+        ):
+            conn.execute("DELETE FROM task_state WHERE key = ?", (key,))
+        conn.execute("DELETE FROM topics WHERE id = ?", tid)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    try:
+        from vector_store import delete_vector_documents_for_topic
+
+        delete_vector_documents_for_topic(topic_id)
+    except Exception as exc:
+        _log.warning("Chroma cleanup after topic %s delete failed: %s", topic_id, exc)
 
 
 # ── Topic Feeds ───────────────────────────────────────
@@ -265,6 +558,705 @@ def remove_topic_feed(feed_id: int):
     conn.execute("UPDATE topic_feeds SET is_active = 0 WHERE id = ?", (feed_id,))
     conn.commit()
     conn.close()
+
+
+# ── Knowledge Lineage ────────────────────────────────
+
+
+def _json_dumps(value) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _json_loads(value, default):
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
+def _serialize_evidence_row(row: sqlite3.Row | dict) -> dict:
+    item = dict(row)
+    item["supporting_event_ids"] = _json_loads(item.get("supporting_event_ids"), [])
+    item["contradicting_event_ids"] = _json_loads(item.get("contradicting_event_ids"), [])
+    item["support_score"] = item.get("confidence", 0.0)
+    item["signal_type"] = item.get("evidence_type", "")
+    return item
+
+
+def _serialize_claim_row(row: sqlite3.Row | dict) -> dict:
+    item = dict(row)
+    item["supporting_evidence_ids"] = _json_loads(item.get("supporting_evidence_ids"), [])
+    item["evidence_ids"] = list(item["supporting_evidence_ids"])
+    item["claim_kind"] = item.get("claim_type", "")
+    item["last_refreshed_at"] = item.get("last_validated_at")
+    item["lifecycle_status"] = item.get("status", "")
+    item["freshness"] = item.get("staleness_status", "")
+    return item
+
+
+def insert_raw_news(items: list[dict]):
+    if not items:
+        return
+    conn = _conn()
+    conn.executemany(
+        """INSERT OR REPLACE INTO raw_news
+           (id, topic_id, article_id, url, normalized_url, title, content, source, source_type,
+            published_at, fetched_at, novelty_score, noise_score, authority_score,
+            freshness_state, retention_until, metadata_json)
+           VALUES (:id, :topic_id, :article_id, :url, :normalized_url, :title, :content, :source,
+                   :source_type, :published_at, COALESCE(:fetched_at, datetime('now')),
+                   :novelty_score, :noise_score, :authority_score, :freshness_state,
+                   :retention_until, :metadata_json)""",
+        items,
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_raw_news(topic_id: int, limit: int = 100):
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT * FROM raw_news
+           WHERE topic_id = ?
+           ORDER BY fetched_at DESC
+           LIMIT ?""",
+        (topic_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def upsert_event(
+    topic_id: int,
+    event_id: str,
+    event_key: str,
+    title: str,
+    summary: str = "",
+    status: str = "active",
+    canonical_article_id: str | None = None,
+    first_seen_at: str | None = None,
+    last_seen_at: str | None = None,
+    novelty_window_end: str | None = None,
+    stability_score: float = 0.0,
+    fact_confidence: float = 0.0,
+    supersedes_event_id: str | None = None,
+    metadata: dict | None = None,
+):
+    conn = _conn()
+    conn.execute(
+        """INSERT INTO events_v2
+           (id, topic_id, event_key, title, summary, status, canonical_article_id, first_seen_at,
+            last_seen_at, novelty_window_end, stability_score, fact_confidence, supersedes_event_id, metadata_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')), ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             topic_id=excluded.topic_id,
+             event_key=excluded.event_key,
+             title=excluded.title,
+             summary=excluded.summary,
+             status=excluded.status,
+             canonical_article_id=COALESCE(excluded.canonical_article_id, events_v2.canonical_article_id),
+             last_seen_at=COALESCE(excluded.last_seen_at, events_v2.last_seen_at, datetime('now')),
+             novelty_window_end=COALESCE(excluded.novelty_window_end, events_v2.novelty_window_end),
+             stability_score=excluded.stability_score,
+             fact_confidence=excluded.fact_confidence,
+             supersedes_event_id=COALESCE(excluded.supersedes_event_id, events_v2.supersedes_event_id),
+             metadata_json=excluded.metadata_json""",
+        (
+            event_id,
+            topic_id,
+            event_key,
+            title,
+            summary,
+            status,
+            canonical_article_id,
+            first_seen_at,
+            last_seen_at,
+            novelty_window_end,
+            stability_score,
+            fact_confidence,
+            supersedes_event_id,
+            _json_dumps(metadata or {}),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def replace_event_sources(event_id: str, sources: list[dict]):
+    conn = _conn()
+    conn.execute("DELETE FROM event_sources WHERE event_id = ?", (event_id,))
+    if sources:
+        conn.executemany(
+            """INSERT INTO event_sources
+               (event_id, raw_news_id, article_id, source_rank, source_role, is_canonical, metadata_json)
+               VALUES (:event_id, :raw_news_id, :article_id, :source_rank, :source_role, :is_canonical, :metadata_json)""",
+            sources,
+        )
+    conn.commit()
+    conn.close()
+
+
+def get_events_v2(topic_id: int, status: str | None = None, limit: int = 50):
+    conn = _conn()
+    where = "WHERE topic_id = ?"
+    params: list = [topic_id]
+    if status:
+        where += " AND status = ?"
+        params.append(status)
+    rows = conn.execute(
+        f"""SELECT * FROM events_v2
+            {where}
+            ORDER BY last_seen_at DESC, created_at DESC
+            LIMIT ?""",
+        params + [limit],
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_event_by_id(event_id: str):
+    conn = _conn()
+    row = conn.execute("SELECT * FROM events_v2 WHERE id = ?", (event_id,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def upsert_evidence_set(
+    evidence_id: str,
+    topic_id: int,
+    event_id: str,
+    claim_id: str | None,
+    title: str,
+    summary: str,
+    evidence_type: str = "fact",
+    stance: str = "supporting",
+    confidence: float = 0.0,
+    freshness_half_life: float = 7.0,
+    review_state: str = "machine_only",
+    supporting_event_ids: list[str] | None = None,
+    contradicting_event_ids: list[str] | None = None,
+    metadata: dict | None = None,
+):
+    conn = _conn()
+    conn.execute(
+        """INSERT INTO evidence_sets
+           (id, topic_id, event_id, claim_id, title, summary, evidence_type, stance, confidence,
+            freshness_half_life, review_state, supporting_event_ids, contradicting_event_ids,
+            metadata_json, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(id) DO UPDATE SET
+             topic_id=excluded.topic_id,
+             event_id=excluded.event_id,
+             claim_id=excluded.claim_id,
+             title=excluded.title,
+             summary=excluded.summary,
+             evidence_type=excluded.evidence_type,
+             stance=excluded.stance,
+             confidence=excluded.confidence,
+             freshness_half_life=excluded.freshness_half_life,
+             review_state=excluded.review_state,
+             supporting_event_ids=excluded.supporting_event_ids,
+             contradicting_event_ids=excluded.contradicting_event_ids,
+             metadata_json=excluded.metadata_json,
+             updated_at=datetime('now')""",
+        (
+            evidence_id,
+            topic_id,
+            event_id,
+            claim_id,
+            title,
+            summary,
+            evidence_type,
+            stance,
+            confidence,
+            freshness_half_life,
+            review_state,
+            _json_dumps(supporting_event_ids or []),
+            _json_dumps(contradicting_event_ids or []),
+            _json_dumps(metadata or {}),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def list_evidence_sets(topic_id: int, limit: int = 100):
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT * FROM evidence_sets
+           WHERE topic_id = ?
+           ORDER BY updated_at DESC, created_at DESC
+           LIMIT ?""",
+        (topic_id, limit),
+    ).fetchall()
+    conn.close()
+    return [_serialize_evidence_row(r) for r in rows]
+
+
+def get_evidence_sets_for_claim(topic_id: int, claim_id: str):
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT * FROM evidence_sets
+           WHERE topic_id = ? AND claim_id = ?
+           ORDER BY updated_at DESC, created_at DESC""",
+        (topic_id, claim_id),
+    ).fetchall()
+    conn.close()
+    return [_serialize_evidence_row(r) for r in rows]
+
+
+def _normalize_statement(statement: str) -> str:
+    return " ".join((statement or "").strip().lower().split())
+
+
+def find_similar_claim(topic_id: int, statement: str):
+    normalized = _normalize_statement(statement)
+    if not normalized:
+        return None
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT * FROM claims
+           WHERE topic_id = ?
+           ORDER BY updated_at DESC, created_at DESC
+           LIMIT 200""",
+        (topic_id,),
+    ).fetchall()
+    conn.close()
+    for row in rows:
+        item = dict(row)
+        if _normalize_statement(item.get("statement", "")) == normalized:
+            return item
+    return None
+
+
+def upsert_claim(
+    topic_id: int,
+    statement: str,
+    claim_id: str | None = None,
+    claim_type: str = "fact",
+    summary: str = "",
+    status: str = "active",
+    supporting_evidence_ids: list[str] | None = None,
+    supersedes_claim_id: str | None = None,
+    decay_policy: str = "medium",
+    staleness_status: str = "fresh",
+    metadata: dict | None = None,
+) -> str:
+    existing = find_similar_claim(topic_id, statement)
+    claim_id = claim_id or (existing["id"] if existing else str(uuid.uuid4()))
+    merged_evidence_ids = list(supporting_evidence_ids or [])
+    if existing:
+        for evidence_id in _json_loads(existing.get("supporting_evidence_ids"), []):
+            if evidence_id not in merged_evidence_ids:
+                merged_evidence_ids.append(evidence_id)
+    conn = _conn()
+    conn.execute(
+        """INSERT INTO claims
+           (id, topic_id, claim_type, statement, summary, status, supporting_evidence_ids,
+            supersedes_claim_id, last_validated_at, decay_policy, staleness_status, metadata_json,
+            updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, datetime('now'))
+           ON CONFLICT(id) DO UPDATE SET
+             claim_type=excluded.claim_type,
+             statement=excluded.statement,
+             summary=excluded.summary,
+             status=excluded.status,
+             supporting_evidence_ids=excluded.supporting_evidence_ids,
+             supersedes_claim_id=COALESCE(excluded.supersedes_claim_id, claims.supersedes_claim_id),
+             last_validated_at=datetime('now'),
+             decay_policy=excluded.decay_policy,
+             staleness_status=excluded.staleness_status,
+             metadata_json=excluded.metadata_json,
+             updated_at=datetime('now')""",
+        (
+            claim_id,
+            topic_id,
+            claim_type,
+            statement,
+            summary,
+            status,
+            _json_dumps(merged_evidence_ids),
+            supersedes_claim_id,
+            decay_policy,
+            staleness_status,
+            _json_dumps(metadata or {}),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    return claim_id
+
+
+def add_claim_evolution(
+    topic_id: int,
+    claim_id: str,
+    previous_claim_id: str | None,
+    relation_type: str,
+    reason: str = "",
+    metadata: dict | None = None,
+):
+    conn = _conn()
+    conn.execute(
+        """INSERT INTO claim_evolution
+           (topic_id, claim_id, previous_claim_id, relation_type, reason, metadata_json)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (topic_id, claim_id, previous_claim_id, relation_type, reason, _json_dumps(metadata or {})),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_claim_evolution(topic_id: int, claim_id: str | None = None, limit: int = 200):
+    conn = _conn()
+    where = "WHERE topic_id = ?"
+    params: list = [topic_id]
+    if claim_id is not None:
+        where += " AND (claim_id = ? OR previous_claim_id = ?)"
+        params.extend([claim_id, claim_id])
+    rows = conn.execute(
+        f"""SELECT * FROM claim_evolution
+            {where}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?""",
+        params + [limit],
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_claim_lifecycle(
+    claim_id: str,
+    *,
+    status: str,
+    staleness_status: str,
+    last_validated_at: str | None = None,
+    supersedes_claim_id: str | None = None,
+    metadata: dict | None = None,
+):
+    conn = _conn()
+    fields = [
+        "status = ?",
+        "staleness_status = ?",
+        "updated_at = datetime('now')",
+    ]
+    params: list = [status, staleness_status]
+    if last_validated_at is not None:
+        fields.append("last_validated_at = ?")
+        params.append(last_validated_at)
+    if supersedes_claim_id is not None:
+        fields.append("supersedes_claim_id = ?")
+        params.append(supersedes_claim_id)
+    if metadata is not None:
+        fields.append("metadata_json = ?")
+        params.append(_json_dumps(metadata))
+    params.append(claim_id)
+    conn.execute(
+        f"UPDATE claims SET {', '.join(fields)} WHERE id = ?",
+        params,
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_claims_v2(topic_id: int, status: str | None = None, limit: int = 100):
+    conn = _conn()
+    where = "WHERE topic_id = ?"
+    params: list = [topic_id]
+    if status:
+        where += " AND status = ?"
+        params.append(status)
+    rows = conn.execute(
+        f"""SELECT * FROM claims
+            {where}
+            ORDER BY last_validated_at DESC, created_at DESC
+            LIMIT ?""",
+        params + [limit],
+    ).fetchall()
+    conn.close()
+    return [_serialize_claim_row(row) for row in rows]
+
+
+def get_active_claims(topic_id: int, limit: int = 100):
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT * FROM claims
+           WHERE topic_id = ? AND status IN ('active', 'stale')
+           ORDER BY last_validated_at DESC, created_at DESC
+           LIMIT ?""",
+        (topic_id, limit),
+    ).fetchall()
+    conn.close()
+    return [_serialize_claim_row(row) for row in rows]
+
+
+def get_current_claims(topic_id: int, limit: int = 100):
+    return get_active_claims(topic_id, limit=limit)
+
+
+def save_temporal_snapshot(
+    topic_id: int,
+    summary_text: str,
+    stats_metadata: str = "{}",
+    window_type: str = "daily",
+    window_start: str | None = None,
+    window_end: str | None = None,
+    snapshot_status: str = "final",
+    event_ids: list[str] | None = None,
+    claim_ids: list[str] | None = None,
+) -> int:
+    conn = _conn()
+    cur = conn.execute(
+        """INSERT INTO temporal_snapshots
+           (topic_id, window_type, window_start, window_end, summary_text, stats_metadata, snapshot_status)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (topic_id, window_type, window_start, window_end, summary_text, stats_metadata, snapshot_status),
+    )
+    snapshot_id = cur.lastrowid
+    if event_ids:
+        conn.executemany(
+            "INSERT INTO snapshot_events (snapshot_id, event_id) VALUES (?, ?)",
+            [(snapshot_id, event_id) for event_id in event_ids],
+        )
+    if claim_ids:
+        conn.executemany(
+            "INSERT INTO snapshot_claims (snapshot_id, claim_id) VALUES (?, ?)",
+            [(snapshot_id, claim_id) for claim_id in claim_ids],
+        )
+    conn.commit()
+    conn.close()
+    return snapshot_id
+
+
+def get_temporal_snapshots(topic_id: int, window_type: str | None = None, limit: int = 20):
+    conn = _conn()
+    where = "WHERE topic_id = ?"
+    params: list = [topic_id]
+    if window_type:
+        where += " AND window_type = ?"
+        params.append(window_type)
+    rows = conn.execute(
+        f"""SELECT * FROM temporal_snapshots
+            {where}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?""",
+        params + [limit],
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_latest_temporal_snapshot(topic_id: int, window_type: str = "daily"):
+    rows = get_temporal_snapshots(topic_id, window_type=window_type, limit=1)
+    return rows[0] if rows else None
+
+
+def get_snapshot_events(snapshot_id: int):
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT e.* FROM snapshot_events se
+           JOIN events_v2 e ON e.id = se.event_id
+           WHERE se.snapshot_id = ?
+           ORDER BY e.last_seen_at DESC""",
+        (snapshot_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_snapshot_claims(snapshot_id: int):
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT c.* FROM snapshot_claims sc
+           JOIN claims c ON c.id = sc.claim_id
+           WHERE sc.snapshot_id = ?
+           ORDER BY c.last_validated_at DESC""",
+        (snapshot_id,),
+    ).fetchall()
+    conn.close()
+    return [_serialize_claim_row(row) for row in rows]
+
+
+def save_snapshot_delta(
+    topic_id: int,
+    from_snapshot_id: int | None,
+    to_snapshot_id: int,
+    change_summary: str,
+    new_event_ids: list[str] | None = None,
+    resolved_event_ids: list[str] | None = None,
+    strengthened_claim_ids: list[str] | None = None,
+    weakened_claim_ids: list[str] | None = None,
+    superseded_claim_ids: list[str] | None = None,
+    metadata: dict | None = None,
+) -> int:
+    conn = _conn()
+    cur = conn.execute(
+        """INSERT INTO snapshot_deltas
+           (topic_id, from_snapshot_id, to_snapshot_id, change_summary, new_event_ids, resolved_event_ids,
+            strengthened_claim_ids, weakened_claim_ids, superseded_claim_ids, metadata_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            topic_id,
+            from_snapshot_id,
+            to_snapshot_id,
+            change_summary,
+            _json_dumps(new_event_ids or []),
+            _json_dumps(resolved_event_ids or []),
+            _json_dumps(strengthened_claim_ids or []),
+            _json_dumps(weakened_claim_ids or []),
+            _json_dumps(superseded_claim_ids or []),
+            _json_dumps(metadata or {}),
+        ),
+    )
+    delta_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return delta_id
+
+
+def get_snapshot_deltas(topic_id: int, limit: int = 20):
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT * FROM snapshot_deltas
+           WHERE topic_id = ?
+           ORDER BY created_at DESC, id DESC
+           LIMIT ?""",
+        (topic_id, limit),
+    ).fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        item = dict(row)
+        for key in (
+            "new_event_ids",
+            "resolved_event_ids",
+            "strengthened_claim_ids",
+            "weakened_claim_ids",
+            "superseded_claim_ids",
+        ):
+            item[key] = _json_loads(item.get(key), [])
+        result.append(item)
+    return result
+
+
+def upsert_synthesis_artifact(
+    topic_id: int,
+    artifact_type: str,
+    title: str,
+    content: str,
+    status: str = "final",
+    version: int = 1,
+    metadata: dict | None = None,
+    source_snapshot_ids: list[int] | None = None,
+    source_delta_ids: list[int] | None = None,
+    source_claim_ids: list[str] | None = None,
+) -> str:
+    artifact_id = str(uuid.uuid4())
+    conn = _conn()
+    conn.execute(
+        """INSERT INTO synthesis_artifacts
+           (id, topic_id, artifact_type, title, content, status, version, metadata_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (artifact_id, topic_id, artifact_type, title, content, status, version, _json_dumps(metadata or {})),
+    )
+    source_rows = []
+    for snapshot_id in source_snapshot_ids or []:
+        source_rows.append((artifact_id, "snapshot", str(snapshot_id)))
+    for delta_id in source_delta_ids or []:
+        source_rows.append((artifact_id, "delta", str(delta_id)))
+    for claim_id in source_claim_ids or []:
+        source_rows.append((artifact_id, "claim", claim_id))
+    if source_rows:
+        conn.executemany(
+            "INSERT INTO artifact_sources (artifact_id, source_type, source_id) VALUES (?, ?, ?)",
+            source_rows,
+        )
+    conn.commit()
+    conn.close()
+    return artifact_id
+
+
+def replace_synthesis_artifact(
+    topic_id: int,
+    artifact_type: str,
+    title: str,
+    content: str,
+    status: str = "final",
+    metadata: dict | None = None,
+    source_snapshot_ids: list[int] | None = None,
+    source_delta_ids: list[int] | None = None,
+    source_claim_ids: list[str] | None = None,
+) -> str:
+    conn = _conn()
+    existing = conn.execute(
+        """SELECT id, version FROM synthesis_artifacts
+           WHERE topic_id = ? AND artifact_type = ?
+           ORDER BY generated_at DESC LIMIT 1""",
+        (topic_id, artifact_type),
+    ).fetchone()
+    artifact_id = existing["id"] if existing else str(uuid.uuid4())
+    version = int(existing["version"]) + 1 if existing else 1
+    conn.execute("DELETE FROM artifact_sources WHERE artifact_id = ?", (artifact_id,))
+    conn.execute(
+        """INSERT INTO synthesis_artifacts
+           (id, topic_id, artifact_type, title, content, status, version, metadata_json, generated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+           ON CONFLICT(id) DO UPDATE SET
+             title=excluded.title,
+             content=excluded.content,
+             status=excluded.status,
+             version=excluded.version,
+             metadata_json=excluded.metadata_json,
+             generated_at=datetime('now')""",
+        (artifact_id, topic_id, artifact_type, title, content, status, version, _json_dumps(metadata or {})),
+    )
+    source_rows = []
+    for snapshot_id in source_snapshot_ids or []:
+        source_rows.append((artifact_id, "snapshot", str(snapshot_id)))
+    for delta_id in source_delta_ids or []:
+        source_rows.append((artifact_id, "delta", str(delta_id)))
+    for claim_id in source_claim_ids or []:
+        source_rows.append((artifact_id, "claim", claim_id))
+    if source_rows:
+        conn.executemany(
+            "INSERT INTO artifact_sources (artifact_id, source_type, source_id) VALUES (?, ?, ?)",
+            source_rows,
+        )
+    conn.commit()
+    conn.close()
+    return artifact_id
+
+
+def get_synthesis_artifact(topic_id: int, artifact_type: str):
+    conn = _conn()
+    row = conn.execute(
+        """SELECT * FROM synthesis_artifacts
+           WHERE topic_id = ? AND artifact_type = ?
+           ORDER BY generated_at DESC LIMIT 1""",
+        (topic_id, artifact_type),
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    artifact = dict(row)
+    source_rows = conn.execute(
+        "SELECT source_type, source_id FROM artifact_sources WHERE artifact_id = ?",
+        (artifact["id"],),
+    ).fetchall()
+    conn.close()
+    artifact["sources"] = [dict(r) for r in source_rows]
+    return artifact
+
+
+def list_artifact_sources(artifact_id: str):
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT source_type, source_id FROM artifact_sources WHERE artifact_id = ?",
+        (artifact_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ── Articles ──────────────────────────────────────────
@@ -348,6 +1340,22 @@ def insert_article(article: dict) -> bool:
         raise
     finally:
         conn.close()
+
+
+def update_article_event_fields(url: str, event_id: str, is_canonical: int, event_size: int) -> None:
+    """Update event linkage fields on an already-stored article.
+
+    Called when the pipeline re-encounters a URL that is already in the DB but
+    belongs to a different (or newly-computed) event cluster.  Keeps event_id,
+    is_canonical, and event_size in sync so get_event_alternatives() works.
+    """
+    conn = _conn()
+    conn.execute(
+        "UPDATE articles SET event_id = ?, is_canonical = ?, event_size = ? WHERE url = ?",
+        (event_id, is_canonical, event_size, url),
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_article_count(topic_id=None, status="active"):
@@ -567,7 +1575,7 @@ def get_insight_summary(topic_id=None, hours=24):
     """Aggregate stats: top events, counts, source distribution."""
     conn = _conn()
     time_filter = "AND created_at >= datetime('now', ?)"
-    base_where = "WHERE 1=1"
+    base_where = "WHERE COALESCE(status, 'active') = 'active'"
     params: list = []
 
     if topic_id is not None:
@@ -657,20 +1665,28 @@ def get_event_alternatives(event_id: str):
     """Return all articles sharing the same event_id."""
     conn = _conn()
     rows = conn.execute(
-        "SELECT * FROM articles WHERE event_id = ? ORDER BY source_score DESC",
+        "SELECT * FROM articles WHERE event_id = ? AND is_canonical = 0 ORDER BY source_score DESC",
         (event_id,),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
 
-def get_topics_overview(hours=24):
-    """Return stats for every active topic — for dashboard cards.
-    Uses aggregated queries instead of per-topic N+1 to stay fast as topic count grows."""
+def get_topics_overview(hours=24, archived_only: bool = False):
+    """Return stats for dashboard cards (active topics, or archived-only when archived_only=True)."""
     conn = _conn()
-    topics = conn.execute(
-        "SELECT * FROM topics WHERE is_active = 1 ORDER BY created_at"
-    ).fetchall()
+    if archived_only:
+        topics = conn.execute(
+            """SELECT * FROM topics
+               WHERE is_active = 1 AND archived_at IS NOT NULL
+               ORDER BY archived_at DESC"""
+        ).fetchall()
+    else:
+        topics = conn.execute(
+            """SELECT * FROM topics
+               WHERE is_active = 1 AND archived_at IS NULL
+               ORDER BY created_at"""
+        ).fetchall()
 
     if not topics:
         conn.close()
@@ -687,6 +1703,7 @@ def get_topics_overview(hours=24):
                    SUM(CASE WHEN importance >= 8 THEN 1 ELSE 0 END) as important
             FROM articles
             WHERE topic_id IN ({placeholders})
+              AND COALESCE(status, 'active') = 'active'
               AND created_at >= datetime('now', ?)
             GROUP BY topic_id""",
         topic_ids + [time_param],
@@ -700,6 +1717,7 @@ def get_topics_overview(hours=24):
         f"""SELECT topic_id, sentiment, COUNT(*) as cnt
             FROM articles
             WHERE topic_id IN ({placeholders})
+              AND COALESCE(status, 'active') = 'active'
               AND created_at >= datetime('now', ?)
             GROUP BY topic_id, sentiment""",
         topic_ids + [time_param],
@@ -713,6 +1731,7 @@ def get_topics_overview(hours=24):
         f"""SELECT topic_id, COUNT(*) as cnt
             FROM articles
             WHERE topic_id IN ({placeholders})
+              AND COALESCE(status, 'active') = 'active'
               AND created_at >= datetime('now', ?)
               AND created_at < datetime('now', ?)
             GROUP BY topic_id""",
@@ -738,6 +1757,7 @@ def get_topics_overview(hours=24):
                        ROW_NUMBER() OVER (PARTITION BY topic_id ORDER BY importance DESC, event_size DESC) as rn
                 FROM articles
                 WHERE topic_id IN ({placeholders})
+                  AND COALESCE(status, 'active') = 'active'
                   AND created_at >= datetime('now', ?)
                   AND is_canonical = 1
             ) WHERE rn = 1""",
@@ -769,7 +1789,7 @@ def get_topics_overview(hours=24):
 def get_topic_insights(topic_id=None, window_hours=24):
     """Topic-level trends: sentiment over time, top tags, trend delta."""
     conn = _conn()
-    base_where = "WHERE 1=1"
+    base_where = "WHERE COALESCE(status, 'active') = 'active'"
     params: list = []
 
     if topic_id is not None:
@@ -840,7 +1860,7 @@ def get_trending_data(topic_id: int, days: int = 7):
                   AVG(importance) as avg_importance,
                   AVG(topic_relevance) as avg_relevance
            FROM articles
-           WHERE topic_id = ? AND created_at >= datetime('now', ?)
+           WHERE topic_id = ? AND COALESCE(status, 'active') = 'active' AND created_at >= datetime('now', ?)
            GROUP BY date(created_at)
            ORDER BY day""",
         (topic_id, f"-{days} days"),
@@ -861,7 +1881,7 @@ def get_trending_data(topic_id: int, days: int = 7):
 
     # Top entities across the window
     entity_rows = conn.execute(
-        "SELECT key_entities FROM articles WHERE topic_id = ? AND created_at >= datetime('now', ?)",
+        "SELECT key_entities FROM articles WHERE topic_id = ? AND COALESCE(status, 'active') = 'active' AND created_at >= datetime('now', ?)",
         (topic_id, f"-{days} days"),
     ).fetchall()
 
@@ -878,7 +1898,7 @@ def get_trending_data(topic_id: int, days: int = 7):
 
     # Average topic relevance
     rel_row = conn.execute(
-        "SELECT AVG(topic_relevance) as avg_rel FROM articles WHERE topic_id = ? AND created_at >= datetime('now', ?)",
+        "SELECT AVG(topic_relevance) as avg_rel FROM articles WHERE topic_id = ? AND COALESCE(status, 'active') = 'active' AND created_at >= datetime('now', ?)",
         (topic_id, f"-{days} days"),
     ).fetchone()
     avg_topic_relevance = round(rel_row["avg_rel"] or 0, 2)
