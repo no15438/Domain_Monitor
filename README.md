@@ -134,9 +134,9 @@ Open [http://localhost:3000](http://localhost:3000)
 1. **Create a topic** on the homepage (e.g., "AI in Healthcare")
 2. Go to the topic page; in the **Research Brief** panel (left), describe your research direction and click **Generate** — AI creates keywords, RSS feeds, research angles, key entities, and geographic/sector scope
 3. Click **Fetch Now** in the header to immediately pull articles, or wait for the scheduled interval (default: every 15 min)
-4. Browse the **Event feed** (middle column); right-click any article card for options: Save to Knowledge Base / Archive / Delete / Change sentiment or importance
+4. Browse the **Event feed** (middle column); right-click any article card for options: Pin for tracking / Archive / Delete / Change sentiment or importance
 5. Check the **Realtime** tab (right panel) for live AI Analysis and Alert Signals; switch to **Overview** for the Global Overview, historical AI snapshots, and Knowledge Base articles
-6. Click the chat icon (top right) to open the **AI Assistant** — ask questions using RAG over stored articles, snapshots, and the Global Overview
+6. Click the chat icon (top right) to open the **AI Assistant** — this replaces the right panel while open; ask questions using RAG over stored articles, snapshots, and the Global Overview
 
 ---
 
@@ -148,13 +148,15 @@ Copy `.env.example` to `backend/.env` and fill in the values you need.
 
 | Variable | Description | Default |
 |---|---|---|
-| `LLM_PROVIDER` | `openai` \| `lmstudio` \| `dashscope` | `lmstudio` |
+| `LLM_PROVIDER` | `openai` \| `anthropic` \| `lmstudio` \| `dashscope` | `openai` |
 | `OPENAI_API_KEY` | OpenAI API key | — |
 | `OPENAI_MODEL` | OpenAI model name | `gpt-4o-mini` |
+| `ANTHROPIC_API_KEY` | Anthropic API key | — |
+| `ANTHROPIC_MODEL` | Anthropic model name | `claude-3-5-haiku-20241022` |
 | `LMSTUDIO_BASE_URL` | LM Studio server URL | `http://localhost:1234/v1` |
 | `LMSTUDIO_MODEL` | LM Studio model identifier | `local-model` |
 | `DASHSCOPE_API_KEY` | Alibaba Cloud DashScope API key | — |
-| `DASHSCOPE_MODEL` | DashScope model name | `qwen-plus` |
+| `DASHSCOPE_MODEL` | DashScope model name | `qwen3.5-flash` |
 | `DASHSCOPE_BASE_URL` | DashScope endpoint | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
 
 ### Data Sources
@@ -224,6 +226,7 @@ Multi-stage recall-then-precision pipeline:
 
 ### AI Analysis (Realtime Tab)
 LLM-generated narrative summary for the topic, cached and updated on demand or on schedule. Includes Notable Signals and Outlook sections.
+Time-window metrics in Signals are computed on article timeline time: `published_at` first, and fallback to `created_at` when publish time is missing.
 
 ### Global Overview (Overview Tab)
 Long-term macro analysis synthesized from historical AI snapshots. Covers domain evolution, key entities, persistent themes, and trend trajectory.
@@ -233,7 +236,7 @@ RAG-powered chat with:
 - **Article context** — clicking "Ask AI" on a card pre-loads that article's full metadata and content
 - **Vector search** — hybrid retrieval from ChromaDB (articles + snapshots) using the query + article title as the search key
 - **Global Overview injection** — macro analysis always injected into system prompt
-- **Multi-turn history** — last 20 messages passed to the LLM for conversational continuity
+- **Multi-turn history** — last 8 messages passed to the LLM for conversational continuity
 - **Per-topic persistence** — chat history saved to `localStorage` per topic
 
 ---
@@ -247,7 +250,7 @@ The Realtime tab shows automated alert signals based on:
 | High negative sentiment | ≥ 40% of recent articles are negative |
 | Elevated negative sentiment | ≥ 30% of recent articles are negative |
 | Volume surge | Current period articles ≥ 100% more than previous period |
-| High important article density | ≥ 40% of articles marked important |
+| High important article density | ≥ 40% of articles with importance score ≥ 8 |
 
 ---
 
@@ -307,9 +310,10 @@ The Realtime tab shows automated alert signals based on:
 | `GET` | `/api/topics/{id}/ai-summary` | Get cached Realtime AI Analysis |
 | `POST` | `/api/topics/{id}/ai-summary/generate` | Trigger AI Analysis regeneration |
 | `GET` | `/api/topics/{id}/ai-summary/status` | Poll generation status |
-| `GET` | `/api/topics/{id}/global-overview` | Get cached Global Overview |
-| `POST` | `/api/topics/{id}/global-overview/generate` | Trigger Global Overview regeneration |
-| `GET` | `/api/topics/{id}/global-overview/status` | Poll generation status |
+| `GET` | `/api/topics/{id}/global-overview` | Get cached Global Overview content |
+| `GET` | `/api/topics/{id}/synthesis/global-overview` | Get Global Overview synthesis artifact |
+| `POST` | `/api/topics/{id}/synthesis/global-overview/generate` | Trigger Global Overview regeneration |
+| `GET` | `/api/topics/{id}/synthesis/global-overview/status` | Poll generation status (includes error/result fields) |
 
 ### Knowledge Base (Snapshots)
 
