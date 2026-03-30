@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 from database import (
+    get_articles,
     get_current_claims,
     get_events_v2,
     get_insight_summary,
@@ -40,12 +41,18 @@ A 2-3 paragraph narrative of what happened recently — the most important event
 ## Outlook
 1-2 sentences on what to watch for next.
 
+## Timeliness Assessment
+Classify key conclusions into: Fresh / Possibly stale / Needs verification.
+For each non-fresh item, briefly state why (timestamp gap, conflicting newer signal, weak recency evidence) and what to verify next.
+
 Rules:
 - Be specific: cite article titles or sources when relevant.
 - Prioritize significance over completeness — pick what matters most.
 - Use clear, direct language. No filler.
 - Write in the same language as the article titles (if titles are in Chinese, write in Chinese; if English, write in English).
-- If there are very few or no articles, say so honestly and keep it short."""
+- If there are very few or no articles, say so honestly and keep it short.
+- Perform an internal freshness reasoning pass before writing (recency, consistency, corroboration), but do NOT reveal hidden reasoning steps.
+- If information appears old or uncertain, lower confidence in wording and place it in Timeliness Assessment."""
 
 
 def _coerce_dt(raw: str | None) -> datetime | None:
@@ -156,7 +163,10 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
                 parts.append(
                     f"  [Event-{i}] {event['title']} "
                     f"(status: {event.get('status', '?')}, "
+                    f"lifecycle: {event.get('event_status', '?')}, "
+                    f"first_seen: {event.get('first_seen_at', '')}, "
                     f"last_seen: {event.get('last_seen_at', '')}, "
+                    f"created_at: {event.get('created_at', '')}, "
                     f"stability: {round(event.get('stability_score', 0), 2)})\n"
                     f"      {event.get('summary', '')[:220]}"
                 )
@@ -167,9 +177,26 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
                     f"  [Claim-{i}] {claim['statement']}\n"
                     f"      lifecycle: {claim.get('status', '?')} · "
                     f"kind: {claim.get('claim_kind', claim.get('claim_type', '?'))} · "
-                    f"last_refreshed: {claim.get('last_refreshed_at', claim.get('last_validated_at', ''))}\n"
+                    f"staleness: {claim.get('staleness_status', '?')} · "
+                    f"last_refreshed: {claim.get('last_refreshed_at', claim.get('last_validated_at', ''))} · "
+                    f"updated_at: {claim.get('updated_at', '')}\n"
                     f"      {claim.get('summary', '')[:220]}"
                 )
+        return "\n".join(parts), events, claims
+
+    articles = get_articles(
+        limit=35, offset=0, topic_id=topic_id, sort="relevance", status="active"
+    )
+    if summary_data.get("total_articles", 0) > 0 or articles:
+        parts.append(
+            "\n[Recent articles — no structured events/claims in DB yet; use these headlines]"
+        )
+        for i, art in enumerate(articles[:30], 1):
+            parts.append(
+                f"  [{i}] {art.get('title', '')}\n"
+                f"      Source: {art.get('source', '')} · "
+                f"{str(art.get('summary', '') or '')[:280]}"
+            )
         return "\n".join(parts), events, claims
 
     return None, [], []
@@ -339,7 +366,14 @@ def generate_topic_summary(topic_id: int, hours: int = 24):
 
     messages = [
         {"role": "system", "content": SUMMARY_SYSTEM},
-        {"role": "user", "content": ctx + "\n\nWrite the executive briefing based on the above data."},
+        {
+            "role": "user",
+            "content": (
+                f"Current UTC time: {datetime.now(timezone.utc).isoformat()}\n\n"
+                f"Context:\n{ctx}\n\n"
+                "Write the executive briefing based on the above data."
+            ),
+        },
     ]
 
     collected = []
@@ -363,7 +397,14 @@ def generate_summary_sync(topic_id: int, hours: int = 24) -> str:
 
     messages = [
         {"role": "system", "content": SUMMARY_SYSTEM},
-        {"role": "user", "content": ctx + "\n\nWrite the executive briefing based on the above data."},
+        {
+            "role": "user",
+            "content": (
+                f"Current UTC time: {datetime.now(timezone.utc).isoformat()}\n\n"
+                f"Context:\n{ctx}\n\n"
+                "Write the executive briefing based on the above data."
+            ),
+        },
     ]
     result = llm_chat(messages, temperature=0.4)
     _persist_and_vectorize(topic_id, result, stats, events, claims)
@@ -372,7 +413,7 @@ def generate_summary_sync(topic_id: int, hours: int = 24) -> str:
 
 GLOBAL_OVERVIEW_SYSTEM = """You are a senior industry analyst writing a definitive 'Global Knowledge Base Overview' for a specific topic.
 
-Your task: You will be provided with historical snapshots, snapshot deltas, active claims, and evidence sets for a topic. Use these to write a comprehensive, macro-level guide to this domain.
+Your task: You will be provided with historical snapshots, snapshot deltas, active events, active claims, and evidence sets for a topic. Use these to write a comprehensive, macro-level guide to this domain.
 
 Structure your response as:
 ## 1. Domain Definition & Scope
@@ -387,26 +428,41 @@ Who are the major players (companies, people, products)? What are their roles an
 ## 4. Persistent Themes & Long-Term Trends
 What are the underlying currents that keep appearing in the high-importance articles?
 
+## 5. Timeliness Assessment & Verification Gaps
+Identify which key narratives are Fresh / Possibly stale / Needs verification, and list what should be re-validated next.
+
 Rules:
 - This is NOT a daily news briefing; this is a permanent 'Wikipedia-style' macro analysis.
 - Connect the dots between isolated events to show the bigger picture.
 - Write in the same language as the provided titles/snapshots.
-- If data is sparse, write a shorter but still macro-level overview."""
+- If data is sparse, write a shorter but still macro-level overview.
+- Perform an internal freshness reasoning pass before writing (recency, consistency, corroboration), but do NOT reveal hidden reasoning chains.
+- Prefer newer snapshots/events/claims when older evidence conflicts; explicitly down-rank stale evidence in section 5."""
 
 
 def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | None]:
     """Returns (context_string, error_message_if_skip). If skip, context is None."""
     snapshots = get_temporal_snapshots(topic_id, window_type="daily", limit=5)
     deltas = get_snapshot_deltas(topic_id, limit=4)
+    events = get_events_v2(topic_id, status=None, limit=20)
     claims = get_current_claims(topic_id, limit=20)
     evidence_sets = list_evidence_sets(topic_id, limit=20)
     rc = _get_topic_research_context(topic_id)
 
-    if not snapshots and not claims and not evidence_sets:
-        return None, (
-            "Not enough lineage data to generate a global overview yet. "
-            "Let the system collect more data."
+    use_article_fallback = False
+    fb_summary: dict | None = None
+    fb_articles: list = []
+    if not snapshots and not events and not claims and not evidence_sets:
+        fb_summary = get_insight_summary(topic_id, 168)
+        fb_articles = get_articles(
+            limit=40, offset=0, topic_id=topic_id, sort="relevance", status="active"
         )
+        if (fb_summary.get("total_articles") or 0) == 0 and not fb_articles:
+            return None, (
+                "Not enough data to generate a global overview yet. "
+                "Fetch some articles for this topic first."
+            )
+        use_article_fallback = True
 
     ctx_parts = []
 
@@ -427,14 +483,34 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
     if snapshots:
         ctx_parts.append("=== Historical Snapshots (Recent to Old) ===")
         for s in snapshots:
-            ctx_parts.append(f"Date: {s['created_at']}\nContent: {s['summary_text']}\n")
+            ctx_parts.append(
+                f"Date: {s['created_at']} · "
+                f"window_start: {s.get('window_start', '')} · "
+                f"window_end: {s.get('window_end', '')} · "
+                f"status: {s.get('snapshot_status', '')}\n"
+                f"Content: {s['summary_text']}\n"
+            )
 
     if deltas:
         ctx_parts.append("=== Snapshot Deltas (Recent to Old) ===")
         for d in deltas:
             ctx_parts.append(
                 f"Delta {d['id']} from {d.get('from_snapshot_id')} to {d.get('to_snapshot_id')}\n"
+                f"Created: {d.get('created_at', '')}\n"
                 f"Summary: {d.get('change_summary', '')}\n"
+            )
+
+    if events:
+        ctx_parts.append("=== Active Events ===")
+        for i, event in enumerate(events[:15], 1):
+            ctx_parts.append(
+                f"[Event-{i}] {event.get('title', '')}\n"
+                f"Status: {event.get('status', '?')} · "
+                f"Lifecycle: {event.get('event_status', '?')} · "
+                f"first_seen: {event.get('first_seen_at', '')} · "
+                f"last_seen: {event.get('last_seen_at', '')} · "
+                f"created_at: {event.get('created_at', '')}\n"
+                f"Summary: {event.get('summary', '')}"
             )
 
     if claims:
@@ -442,7 +518,10 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
         for i, claim in enumerate(claims, 1):
             ctx_parts.append(
                 f"[Claim-{i}] {claim['statement']}\n"
-                f"Lifecycle: {claim.get('status', '?')} · Kind: {claim.get('claim_kind', claim.get('claim_type', '?'))}\n"
+                f"Lifecycle: {claim.get('status', '?')} · Kind: {claim.get('claim_kind', claim.get('claim_type', '?'))} · "
+                f"staleness: {claim.get('staleness_status', '?')} · "
+                f"last_validated: {claim.get('last_validated_at', '')} · "
+                f"updated_at: {claim.get('updated_at', '')}\n"
                 f"Summary: {claim.get('summary', '')}"
             )
 
@@ -452,8 +531,32 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
             ctx_parts.append(
                 f"[Evidence-{i}] {evidence['title']}\n"
                 f"Type: {evidence.get('evidence_type', '?')} · Stance: {evidence.get('stance', '?')}\n"
+                f"Created: {evidence.get('created_at', '')} · Updated: {evidence.get('updated_at', '')}\n"
                 f"Summary: {evidence.get('summary', '')}"
             )
+
+    if use_article_fallback and fb_summary is not None:
+        ctx_parts.append(
+            "=== Recent corpus (no daily snapshots / claims / evidence yet) ===\n"
+            f"Article count (7d window): {fb_summary.get('total_articles', 0)} · "
+            f"Important: {fb_summary.get('important_count', 0)}"
+        )
+        if fb_summary.get("top_events"):
+            tops = fb_summary["top_events"][:5]
+            ctx_parts.append(
+                "Top events (from insights):\n"
+                + "\n".join(
+                    f"  • {(ev.get('title') or ev.get('id') or '')[:120]}" for ev in tops
+                )
+            )
+        for i, art in enumerate(fb_articles[:35], 1):
+            line = (
+                f"[{i}] {art.get('title', '')}\n"
+                f"    Source: {art.get('source', '')} · "
+                f"Sentiment: {art.get('sentiment', '')}\n"
+                f"    {str(art.get('summary', '') or '')[:400]}"
+            )
+            ctx_parts.append(line)
 
     return "\n\n".join(ctx_parts), None
 
@@ -470,7 +573,14 @@ def generate_global_overview_sync(topic_id: int) -> str:
 
     messages = [
         {"role": "system", "content": GLOBAL_OVERVIEW_SYSTEM},
-        {"role": "user", "content": f"Context:\n{ctx}\n\nWrite the comprehensive global overview."},
+        {
+            "role": "user",
+            "content": (
+                f"Current UTC time: {datetime.now(timezone.utc).isoformat()}\n\n"
+                f"Context:\n{ctx}\n\n"
+                "Write the comprehensive global overview."
+            ),
+        },
     ]
     result = llm_chat(messages, temperature=0.5)
     artifact_id = replace_synthesis_artifact(
@@ -513,12 +623,12 @@ def generate_evolution_report_sync(topic_id: int) -> str:
     snapshots = get_temporal_snapshots(topic_id, window_type="daily", limit=5)
     deltas = get_snapshot_deltas(topic_id, limit=5)
     claims = get_claims_v2(topic_id, limit=20)
-    if not snapshots and not deltas:
-        return ""
 
-    ctx_parts = ["=== Recent Snapshots ==="]
-    for snap in snapshots:
-        ctx_parts.append(f"{snap['created_at']}\n{snap['summary_text']}")
+    ctx_parts: list[str] = []
+    if snapshots:
+        ctx_parts.append("=== Recent Snapshots ===")
+        for snap in snapshots:
+            ctx_parts.append(f"{snap['created_at']}\n{snap['summary_text']}")
     if deltas:
         ctx_parts.append("=== Snapshot Deltas ===")
         for delta in deltas:
@@ -528,6 +638,21 @@ def generate_evolution_report_sync(topic_id: int) -> str:
         for claim in claims[:15]:
             ctx_parts.append(
                 f"{claim['statement']}\nstatus={claim.get('status', '?')} summary={claim.get('summary', '')}"
+            )
+
+    if not ctx_parts:
+        articles = get_articles(
+            limit=35, offset=0, topic_id=topic_id, sort="relevance", status="active"
+        )
+        if not articles:
+            return ""
+        ctx_parts.append(
+            "=== Recent articles (no snapshot timeline yet; provisional evolution view) ==="
+        )
+        for art in articles[:30]:
+            ctx_parts.append(
+                f"- {art.get('title', '')}\n"
+                f"  {str(art.get('summary', '') or '')[:320]}"
             )
 
     result = llm_chat(
@@ -574,7 +699,14 @@ def generate_global_overview(topic_id: int):
 
     messages = [
         {"role": "system", "content": GLOBAL_OVERVIEW_SYSTEM},
-        {"role": "user", "content": f"Context:\n{ctx}\n\nWrite the comprehensive global overview."},
+        {
+            "role": "user",
+            "content": (
+                f"Current UTC time: {datetime.now(timezone.utc).isoformat()}\n\n"
+                f"Context:\n{ctx}\n\n"
+                "Write the comprehensive global overview."
+            ),
+        },
     ]
 
     collected = []
