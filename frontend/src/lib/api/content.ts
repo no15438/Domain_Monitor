@@ -1,5 +1,5 @@
 import { BASE, fetchWithRetry, safeJson } from "./shared";
-import type { Article, EventCluster, EventSource } from "./types";
+import type { Article, EventCluster, ClusterSource } from "./types";
 
 export async function fetchArticles(
   limit = 50,
@@ -41,7 +41,7 @@ export async function fetchEvents(
 
 export async function fetchEventSources(
   eventId: string,
-): Promise<{ sources: EventSource[] }> {
+): Promise<{ sources: ClusterSource[] }> {
   const res = await fetch(`${BASE}/api/events/${eventId}/sources`);
   return safeJson(res, { sources: [] });
 }

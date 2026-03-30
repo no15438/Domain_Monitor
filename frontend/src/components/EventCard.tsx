@@ -12,7 +12,7 @@ import {
   Bookmark,
   Globe,
 } from "lucide-react";
-import type { EventCluster, EventSource } from "@/lib/api";
+import type { EventCluster, ClusterSource } from "@/lib/api";
 import {
   fetchEventSources,
   archiveEvent,
@@ -60,7 +60,7 @@ export default function EventCard({
   const showTrackingPin = shouldShowTrackingPin(isKept);
 
   const [expanded, setExpanded] = useState(false);
-  const [sources, setSources] = useState<EventSource[]>([]);
+  const [sources, setSources] = useState<ClusterSource[]>([]);
   const [loadingSources, setLoadingSources] = useState(false);
 
   const [ctxVisible, setCtxVisible] = useState(false);
@@ -353,7 +353,7 @@ export default function EventCard({
   );
 }
 
-function SourceRow({ source }: { source: EventSource }) {
+function SourceRow({ source }: { source: ClusterSource }) {
   return (
     <div className="flex items-center gap-2 py-1.5 border-b border-border/50 last:border-0">
       <div className="flex-1 min-w-0">

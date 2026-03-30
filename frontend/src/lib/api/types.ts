@@ -221,7 +221,7 @@ export interface CachedSummary {
 // Returned by /api/events. Represents a cluster of articles about the same event,
 // backed by events_v2 (when available) joined with the canonical article.
 
-export interface EventSource {
+export interface ClusterSource {
   id: string;
   title: string;
   source: string;
