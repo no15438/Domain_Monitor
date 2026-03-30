@@ -12,15 +12,20 @@ from pydantic import BaseModel
 
 from config import settings
 from database import (
+    get_active_claims,
     init_db,
     get_articles,
     get_article_count,
+    get_claims_v2,
+    get_events_v2,
     get_keywords,
     add_keyword,
     remove_keyword,
     get_topics,
     create_topic,
     update_topic,
+    archive_topic,
+    unarchive_topic,
     delete_topic,
     get_topic_feeds,
     add_topic_feed,
@@ -30,9 +35,12 @@ from database import (
     get_event_alternatives,
     get_topic_insights,
     get_topics_overview,
-    get_latest_snapshot,
+    get_latest_temporal_snapshot,
+    get_synthesis_artifact,
+    get_snapshot_deltas,
+    get_temporal_snapshots,
     get_trending_data,
-    get_snapshot_history,
+    list_evidence_sets,
     delete_snapshot,
     update_snapshot,
     get_kept_articles,
@@ -41,8 +49,6 @@ from database import (
     delete_article,
     archive_article,
     restore_article,
-    get_topic_global_overview,
-    update_topic_global_overview,
     task_start,
     task_finish,
     task_is_running,
@@ -53,7 +59,8 @@ from scheduler import start_scheduler, stop_scheduler
 from sse_manager import set_event_loop, sse_clients, notify_clients
 from pipeline import run_pipeline_once
 from chatbot import chat_stream_with_status
-from topic_summary import generate_summary_sync, generate_global_overview_sync
+from topic_summary import generate_summary_sync, generate_global_overview_sync, generate_evolution_report_sync
+from claim_lifecycle import evaluate_claim_lifecycle
 
 log = logging.getLogger("main")
 
@@ -111,6 +118,16 @@ async def _run_live_summary_background(topic_id: int, hours: int):
         _bg_finish(key, error=str(e))
 
 
+async def _run_evolution_report_background(topic_id: int):
+    key = f"evolution-{topic_id}"
+    try:
+        await asyncio.to_thread(generate_evolution_report_sync, topic_id)
+        _bg_finish(key, result=f"generated evolution report for topic {topic_id}")
+    except Exception as e:
+        log.error("evolution-report error for topic %d: %s", topic_id, e)
+        _bg_finish(key, error=str(e))
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     logging.basicConfig(
@@ -157,7 +174,14 @@ async def list_topics():
 @app.get("/api/topics/overview")
 async def topics_overview(hours: int = 24):
     hours = max(1, min(hours, 720))
-    data = await asyncio.to_thread(get_topics_overview, hours)
+    data = await asyncio.to_thread(get_topics_overview, hours, False)
+    return {"topics": data}
+
+
+@app.get("/api/topics/archived/overview")
+async def archived_topics_overview(hours: int = 24):
+    hours = max(1, min(hours, 720))
+    data = await asyncio.to_thread(get_topics_overview, hours, True)
     return {"topics": data}
 
 
@@ -187,6 +211,18 @@ async def api_update_topic(topic_id: int, req: TopicUpdateReq):
     await asyncio.to_thread(
         update_topic, topic_id, req.name, req.color, req.research_brief, req.research_config, req.pipeline_config
     )
+    return {"status": "ok"}
+
+
+@app.post("/api/topics/{topic_id}/archive")
+async def api_archive_topic(topic_id: int):
+    await asyncio.to_thread(archive_topic, topic_id)
+    return {"status": "ok"}
+
+
+@app.post("/api/topics/{topic_id}/unarchive")
+async def api_unarchive_topic(topic_id: int):
+    await asyncio.to_thread(unarchive_topic, topic_id)
     return {"status": "ok"}
 
 
@@ -459,11 +495,52 @@ async def api_trending(topic_id: int, days: int = 7):
     return data
 
 
-# ── Knowledge Base (Snapshots & Articles) ────────────
+# ── Knowledge Lineage ────────────────────────────────
 
 @app.get("/api/topics/{topic_id}/snapshots")
-async def api_get_snapshots(topic_id: int):
-    return await asyncio.to_thread(get_snapshot_history, topic_id, 50)
+async def api_get_snapshots(topic_id: int, window: Optional[str] = None):
+    return await asyncio.to_thread(get_temporal_snapshots, topic_id, window or "daily", 50)
+
+
+@app.get("/api/topics/{topic_id}/events/active")
+async def api_get_active_events(topic_id: int):
+    events = await asyncio.to_thread(get_events_v2, topic_id, "active", 50)
+    return {"events": events}
+
+
+@app.get("/api/topics/{topic_id}/events/history")
+async def api_get_event_history(topic_id: int):
+    events = await asyncio.to_thread(get_events_v2, topic_id, None, 100)
+    return {"events": events}
+
+
+@app.get("/api/topics/{topic_id}/evidence")
+async def api_get_evidence(topic_id: int):
+    evidence = await asyncio.to_thread(list_evidence_sets, topic_id, 100)
+    return {"evidence": evidence}
+
+
+@app.get("/api/topics/{topic_id}/claims")
+async def api_get_claims(topic_id: int, status: Optional[str] = None):
+    claims = await asyncio.to_thread(get_claims_v2, topic_id, status, 100)
+    return {"claims": claims}
+
+
+@app.get("/api/topics/{topic_id}/snapshot-deltas")
+async def api_get_snapshot_deltas(topic_id: int):
+    deltas = await asyncio.to_thread(get_snapshot_deltas, topic_id, 50)
+    return {"deltas": deltas}
+
+
+@app.get("/api/topics/{topic_id}/claim-lifecycle-audit")
+async def api_get_claim_lifecycle_audit(topic_id: int):
+    audit = await asyncio.to_thread(
+        evaluate_claim_lifecycle,
+        topic_id,
+        persist=False,
+        source="api_audit",
+    )
+    return audit
 
 
 class UpdateSnapshotReq(BaseModel):
@@ -541,12 +618,12 @@ async def api_restore_article(article_id: str):
 
 @app.get("/api/topics/{topic_id}/ai-summary")
 async def api_topic_ai_summary(topic_id: int):
-    """Return latest snapshot. Returns null content if none exists yet."""
-    snap = await asyncio.to_thread(get_latest_snapshot, topic_id)
+    """Return latest temporal snapshot. Returns null content if none exists yet."""
+    snap = await asyncio.to_thread(get_latest_temporal_snapshot, topic_id, "daily")
     if snap:
         return {
-            "content": snap["content"],
-            "generated_at": snap["generated_at"],
+            "content": snap["summary_text"],
+            "generated_at": snap["window_end"] or snap["created_at"],
             "snapshot_id": snap["id"],
             "stats_metadata": snap["stats_metadata"],
         }
@@ -571,8 +648,9 @@ async def api_live_summary_status(topic_id: int):
 
 @app.get("/api/topics/{topic_id}/global-overview")
 async def api_topic_global_overview(topic_id: int):
-    """Return stored global overview. Returns null content if none exists yet."""
-    content = await asyncio.to_thread(get_topic_global_overview, topic_id)
+    """Return stored lineage synthesis overview. Returns null content if none exists yet."""
+    artifact = await asyncio.to_thread(get_synthesis_artifact, topic_id, "global_overview")
+    content = artifact["content"] if artifact else None
     return {"content": content}
 
 
@@ -590,6 +668,46 @@ async def api_generate_global_overview(topic_id: int):
 async def api_global_overview_status(topic_id: int):
     """Whether a global overview job is currently running for this topic."""
     return {"generating": _bg_is_running(f"global-{topic_id}")}
+
+
+@app.get("/api/topics/{topic_id}/synthesis/global-overview")
+async def api_synthesis_global_overview(topic_id: int):
+    artifact = await asyncio.to_thread(get_synthesis_artifact, topic_id, "global_overview")
+    return {"artifact": artifact}
+
+
+@app.post("/api/topics/{topic_id}/synthesis/global-overview/generate")
+async def api_synthesis_generate_global_overview(topic_id: int):
+    key = f"global-{topic_id}"
+    if not _bg_try_start(key):
+        return {"started": False, "already_running": True}
+    asyncio.create_task(_run_global_overview_background(topic_id))
+    return {"started": True, "already_running": False}
+
+
+@app.get("/api/topics/{topic_id}/synthesis/global-overview/status")
+async def api_synthesis_global_overview_status(topic_id: int):
+    return {"generating": _bg_is_running(f"global-{topic_id}")}
+
+
+@app.get("/api/topics/{topic_id}/synthesis/evolution-report")
+async def api_synthesis_evolution_report(topic_id: int):
+    artifact = await asyncio.to_thread(get_synthesis_artifact, topic_id, "evolution_report")
+    return {"artifact": artifact}
+
+
+@app.post("/api/topics/{topic_id}/synthesis/evolution-report/generate")
+async def api_generate_evolution_report(topic_id: int):
+    key = f"evolution-{topic_id}"
+    if not _bg_try_start(key):
+        return {"started": False, "already_running": True}
+    asyncio.create_task(_run_evolution_report_background(topic_id))
+    return {"started": True, "already_running": False}
+
+
+@app.get("/api/topics/{topic_id}/synthesis/evolution-report/status")
+async def api_evolution_report_status(topic_id: int):
+    return {"generating": _bg_is_running(f"evolution-{topic_id}")}
 
 # ── Chatbot (streaming) ──────────────────────────────
 
