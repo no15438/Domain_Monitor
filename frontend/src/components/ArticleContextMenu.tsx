@@ -223,12 +223,12 @@ export default function ArticleContextMenu({
           {isKept ? (
             <>
               <BookmarkCheck className="w-3.5 h-3.5 text-accent" aria-hidden="true" />
-              <span>Remove from Knowledge Base</span>
+              <span>Remove tracking pin</span>
             </>
           ) : (
             <>
               <Bookmark className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Save to Knowledge Base</span>
+              <span>Pin for tracking</span>
             </>
           )}
         </button>

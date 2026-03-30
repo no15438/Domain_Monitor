@@ -4,9 +4,6 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import {
   ExternalLink,
-  TrendingUp,
-  TrendingDown,
-  Minus,
   Sparkles,
   Layers,
   Shield,
@@ -17,16 +14,7 @@ import { useStore } from "@/stores/useStore";
 import ArticleContextMenu from "./ArticleContextMenu";
 import { effectiveImportance, parseTags } from "@/lib/utils";
 import { IMPORTANCE_THRESHOLD } from "@/lib/constants";
-
-const sentimentConfig = {
-  positive: { icon: TrendingUp, color: "text-positive", bg: "bg-positive/10" },
-  negative: {
-    icon: TrendingDown,
-    color: "text-negative",
-    bg: "bg-negative/10",
-  },
-  neutral: { icon: Minus, color: "text-muted", bg: "bg-muted/10" },
-} as const;
+import { shouldShowTrackingPin, sentimentConfig } from "./contentCardShared";
 
 export default function NewsCard({
   article,
@@ -53,7 +41,7 @@ export default function NewsCard({
   const effImp = effectiveImportance(curImportance, article.published_at ?? article.created_at);
   const isImportant = effImp >= IMPORTANCE_THRESHOLD;
   const isArchived = article.status === "archived";
-  const inKB = isKept || isImportant;
+  const showTrackingPin = shouldShowTrackingPin(isKept);
 
   // Context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -69,12 +57,12 @@ export default function NewsCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
       onContextMenu={handleContextMenu}
-      className={`group relative p-4 rounded-xl border transition-colors ${
+      className={`group relative p-4 rounded-xl shadow-sm hover:shadow-md transition-all border ${
         isArchived
           ? "border-border/50 bg-surface/50 opacity-70"
           : isImportant
             ? "border-important/40 bg-important/5 hover:border-important/60"
-            : "border-border bg-surface hover:border-accent/30"
+            : "border-border bg-surface hover:border-accent/40"
       }`}
     >
       {/* badges row */}
@@ -126,9 +114,9 @@ export default function NewsCard({
 
         {/* Status indicators (right side) */}
         <div className="ml-auto flex items-center gap-1.5">
-          {inKB && !isArchived && (
-            <span className="px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-500/15 text-amber-500" title="In Knowledge Base">
-              KB
+          {showTrackingPin && !isArchived && (
+            <span className="px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-500/15 text-amber-500" title="Pinned for tracking">
+              PIN
             </span>
           )}
           {isKept && (

@@ -280,7 +280,7 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
   // ── Collapsed State ──
   if (collapsed) {
     return (
-      <div className="w-10 shrink-0 border-r border-border bg-surface/50 flex flex-col items-center pt-3 gap-3">
+      <div className="w-10 shrink-0 border-r border-border bg-surface flex flex-col items-center pt-3 gap-3">
         <button onClick={onToggle} className="p-1.5 rounded-lg text-muted hover:text-foreground hover:bg-surface-hover transition-colors" title="Expand research panel">
           <PanelLeftOpen className="w-4 h-4" />
         </button>
@@ -292,9 +292,9 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
   }
 
   return (
-    <div className="w-[280px] shrink-0 border-r border-border bg-surface/30 flex flex-col overflow-hidden">
+    <div className="w-[280px] shrink-0 border-r border-border bg-surface flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-border bg-surface/60">
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-border bg-surface">
         <div className="flex items-center gap-2 min-w-0">
           <FileText className="w-4 h-4 text-accent shrink-0" />
           <span className="text-xs font-semibold tracking-tight truncate">Research Brief</span>

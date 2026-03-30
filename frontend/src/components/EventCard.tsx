@@ -4,9 +4,6 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ExternalLink,
-  TrendingUp,
-  TrendingDown,
-  Minus,
   Sparkles,
   Layers,
   Shield,
@@ -20,12 +17,7 @@ import { useStore } from "@/stores/useStore";
 import ArticleContextMenu from "./ArticleContextMenu";
 import { effectiveImportance, parseTags } from "@/lib/utils";
 import { IMPORTANCE_THRESHOLD } from "@/lib/constants";
-
-const sentimentConfig = {
-  positive: { icon: TrendingUp, color: "text-positive", bg: "bg-positive/10" },
-  negative: { icon: TrendingDown, color: "text-negative", bg: "bg-negative/10" },
-  neutral: { icon: Minus, color: "text-muted", bg: "bg-muted/10" },
-} as const;
+import { shouldShowTrackingPin, sentimentConfig } from "./contentCardShared";
 
 export default function EventCard({
   article,
@@ -52,9 +44,9 @@ export default function EventCard({
   const tags = parseTags(article.tags);
   const effImp = effectiveImportance(curImportance, article.published_at ?? article.created_at);
   const isImportant = effImp >= IMPORTANCE_THRESHOLD;
-  const hasAlternatives = article.event_size > 1 && article.event_id;
+  const hasAlternatives = article.event_size > 1 && !!article.event_id;
   const isArchived = article.status === "archived";
-  const inKB = isKept || isImportant;
+  const showTrackingPin = shouldShowTrackingPin(isKept);
 
   const [expanded, setExpanded] = useState(false);
   const [alternatives, setAlternatives] = useState<Article[]>([]);
@@ -88,19 +80,19 @@ export default function EventCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3 }}
       onContextMenu={handleContextMenu}
-      className={`group relative rounded-xl border transition-all ${
+      className={`group relative rounded-xl shadow-sm hover:shadow-md transition-all border ${
         isArchived
           ? "border-border/50 bg-surface/50 opacity-70"
           : isHighlighted
             ? "border-accent bg-accent/5 ring-1 ring-accent/30"
             : isImportant
               ? "border-important/40 bg-important/5 hover:border-important/60"
-              : "border-border bg-surface hover:border-accent/30"
+              : "border-border bg-surface hover:border-accent/40"
       }`}
     >
       <div className="p-4">
         {/* badges row */}
-        <div className="flex items-center gap-2 mb-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
           {isNew && (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-accent text-white animate-pulse">
               NEW
@@ -145,30 +137,30 @@ export default function EventCard({
               {article.source_type}
             </span>
           )}
-
-          {/* Status indicators (right side) */}
-          <div className="ml-auto flex items-center gap-1.5">
-            {inKB && !isArchived && (
-              <span className="px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-500/15 text-amber-500" title="In Knowledge Base">
-                KB
-              </span>
-            )}
-            {isKept && (
-              <Bookmark className="w-3.5 h-3.5 text-accent fill-accent/30" />
-            )}
-          </div>
+          {(showTrackingPin && !isArchived) || isKept ? (
+            <div className="ml-auto flex items-center gap-1.5 shrink-0">
+              {showTrackingPin && !isArchived && (
+                <span className="px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-500/15 text-amber-500" title="Pinned for tracking">
+                  PIN
+                </span>
+              )}
+              {isKept && (
+                <Bookmark className="w-3.5 h-3.5 text-accent fill-accent/30" />
+              )}
+            </div>
+          ) : null}
         </div>
 
-        {/* Dual date line */}
-        <div className="flex items-center gap-3 mb-2 text-[10px] text-muted">
+        {/* Date line */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mb-2 text-[10px] text-muted">
           {article.published_at && (
-            <span>
+            <span className="whitespace-nowrap">
               <span className="uppercase tracking-wide font-medium mr-1">Published</span>
               {article.published_at.slice(0, 16)}
             </span>
           )}
           {article.created_at && (
-            <span>
+            <span className="whitespace-nowrap">
               <span className="uppercase tracking-wide font-medium mr-1">Fetched</span>
               {article.created_at.slice(0, 16)}
             </span>
@@ -202,7 +194,7 @@ export default function EventCard({
         )}
 
         {/* actions row */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             onClick={() => { setSelectedArticle(article); setChatOpen(true); }}
             className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium bg-accent/10 text-accent-hover hover:bg-accent/20 transition-colors"
@@ -234,7 +226,7 @@ export default function EventCard({
               {article.event_size - 1} more source{article.event_size > 2 ? "s" : ""}
             </button>
           )}
-          <span className="ml-auto text-[10px] text-muted">
+          <span className="ml-auto shrink-0 text-[10px] text-muted truncate max-w-[40%]" title={article.source || "web"}>
             {article.source || "web"}
           </span>
         </div>
@@ -247,7 +239,7 @@ export default function EventCard({
             initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden border-t border-border"
+            className="overflow-hidden border-t border-border bg-surface-hover/30"
           >
             <div className="px-4 py-2 space-y-2">
               {loadingAlt ? (

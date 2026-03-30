@@ -8,6 +8,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { useStore } from "@/stores/useStore";
+import ThemeToggle from "@/components/ThemeToggle";
 import { triggerFetch, fetchFetchStatus } from "@/lib/api";
 
 function useLastFetchedLabel(articles: { created_at: string }[]): string | null {
@@ -17,7 +18,8 @@ function useLastFetchedLabel(articles: { created_at: string }[]): string | null 
   const latest = withDate.reduce((best, a) =>
     a.created_at > best.created_at ? a : best
   );
-  const ts = new Date(latest.created_at.replace(" ", "T") + "Z");
+  const s = latest.created_at.trim().replace(" ", "T");
+  const ts = new Date(s.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(s) ? s : s + "Z");
   if (isNaN(ts.getTime())) return null;
   const diffMs = Date.now() - ts.getTime();
   const diffMin = Math.floor(diffMs / 60_000);
@@ -117,16 +119,17 @@ export default function TopicHeader({
         className="w-3 h-3 rounded-full shrink-0"
         style={{ backgroundColor: topicColor }}
       />
-      <h1 className="text-base font-semibold tracking-tight">
-        {topicName}
-      </h1>
+      <div>
+        <h1 className="text-base font-semibold tracking-tight">{topicName}</h1>
+        <p className="text-[11px] text-muted">Topic workspace</p>
+      </div>
 
       <div className="flex-1" />
 
       <div className="flex items-center gap-2">
         {!isFetching && lastFetchedLabel && (
-          <span className="text-[11px] text-muted">
-            Last fetched {lastFetchedLabel}
+          <span className="text-[11px] text-muted" title="The time the latest news articles were fetched for this topic">
+            News fetched {lastFetchedLabel}
           </span>
         )}
         <button
@@ -152,6 +155,9 @@ export default function TopicHeader({
       >
         <MessageSquare className="w-4 h-4" aria-hidden="true" />
       </button>
+
+      <div className="w-px h-6 bg-border mx-1" />
+      <ThemeToggle />
     </header>
   );
 }

@@ -104,7 +104,7 @@ export default function ChatBot() {
 
   return (
     <div
-      className="flex-4 min-w-[320px] flex flex-col border-l border-border bg-surface/95 overflow-hidden"
+      className="flex-[4] min-w-[320px] flex flex-col border-l border-border bg-surface shadow-sm overflow-hidden"
     >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">

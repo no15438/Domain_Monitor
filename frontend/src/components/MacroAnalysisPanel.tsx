@@ -3,52 +3,119 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
+  AlertTriangle,
   BarChart3,
   BookOpen,
-  Clock3,
+  FileText,
   Loader2,
   RefreshCw,
   Sparkles,
-  ChevronDown,
-  ChevronUp,
-  Check,
-  X,
-  Edit3,
-  Trash2,
-  ExternalLink,
-  Bookmark,
   Database,
+  Info,
 } from "lucide-react";
 import {
-  fetchSnapshots,
-  fetchKeptArticles,
-  updateSnapshot,
-  deleteSnapshot,
-  updateArticle,
-  deleteArticle,
-  toggleArticleKept,
-  type Snapshot,
   type TrendingData,
-  type Article,
+  type Claim,
+  type EvidenceSet,
 } from "@/lib/api";
 import { useStore } from "@/stores/useStore";
+import EvolutionPanel from "./EvolutionPanel";
+import { useTopicKnowledgeData } from "@/lib/hooks/useTopicKnowledgeData";
+import {
+  getClaimKindLabel,
+  getClaimKindExplain,
+  getClaimStatusLabel,
+  getClaimStatusExplain,
+  getReviewStateLabel,
+  getSnapshotStatusLabel,
+} from "@/lib/knowledgeLabels";
+import { timeAgo } from "@/lib/utils";
 
-function tagsJsonToComma(tags: string): string {
-  try {
-    const arr = JSON.parse(tags || "[]");
-    return Array.isArray(arr) ? arr.join(", ") : "";
-  } catch {
-    return "";
-  }
-}
+function ClaimCard({ claim, evidence }: { claim: Claim; evidence: EvidenceSet[] }) {
+  const [expandedSection, setExpandedSection] = useState<"explain" | "sources" | null>(null);
 
-function parseTagsArray(tags: string): string[] {
-  try {
-    const arr = JSON.parse(tags || "[]");
-    return Array.isArray(arr) ? arr : [];
-  } catch {
-    return [];
-  }
+  const kindLabel = getClaimKindLabel(claim.claim_kind ?? claim.claim_type);
+  const kindExplain = getClaimKindExplain(claim.claim_kind ?? claim.claim_type);
+  const statusLabel = getClaimStatusLabel(claim.lifecycle_status ?? claim.status);
+  const statusExplain = getClaimStatusExplain(claim.lifecycle_status ?? claim.status);
+  
+  const timeStr = (claim.last_refreshed_at ? timeAgo(claim.last_refreshed_at) : null) ?? "unknown";
+
+  const claimEvidence = evidence.filter(e => 
+    claim.supporting_evidence_ids?.includes(e.id) || 
+    claim.evidence_ids?.includes(e.id)
+  );
+
+  return (
+    <div className="rounded-md border border-border/50 bg-surface/60 p-3 flex flex-col gap-2">
+      <div>
+        <p className="text-[12px] font-semibold leading-snug">{claim.statement}</p>
+        <p className="text-[11px] text-muted mt-1">{claim.summary}</p>
+      </div>
+      
+      <div className="flex flex-wrap gap-1.5 items-center mt-1">
+        {/* Badge 1: Kind & Status */}
+        <button 
+          onClick={() => setExpandedSection(expandedSection === "explain" ? null : "explain")}
+          className={`flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] transition-colors ${
+            expandedSection === "explain" 
+              ? "bg-accent/10 border-accent/20 text-accent" 
+              : "border-border/50 bg-surface text-muted hover:text-foreground"
+          }`}
+        >
+          {kindLabel} • {statusLabel}
+          <Info className="w-3 h-3 ml-0.5 opacity-60" />
+        </button>
+
+        {/* Badge 2: Updated */}
+        <div className="px-1.5 py-0.5 rounded border border-border/50 bg-surface text-[10px] text-muted">
+          Updated {timeStr}
+        </div>
+
+        {/* Badge 3: Sources */}
+        <button
+          onClick={() => setExpandedSection(expandedSection === "sources" ? null : "sources")}
+          className={`ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] transition-colors ${
+            expandedSection === "sources"
+              ? "bg-accent/10 border-accent/20 text-accent"
+              : "border-border/50 bg-surface text-muted hover:text-foreground"
+          }`}
+        >
+          <Database className="w-3 h-3" />
+          {claimEvidence.length > 0 ? `${claimEvidence.length} Sources` : "Sources"}
+        </button>
+      </div>
+
+      {/* Expanded Sections */}
+      {expandedSection === "explain" && (
+        <div className="mt-2 p-2 rounded bg-surface border border-border/50 text-[10px] space-y-1.5 animate-in fade-in slide-in-from-top-1">
+          <div>
+            <span className="font-semibold text-foreground">{kindLabel}:</span>{" "}
+            <span className="text-muted">{kindExplain}</span>
+          </div>
+          <div>
+            <span className="font-semibold text-foreground">{statusLabel}:</span>{" "}
+            <span className="text-muted">{statusExplain}</span>
+          </div>
+        </div>
+      )}
+
+      {expandedSection === "sources" && (
+        <div className="mt-2 p-2 rounded bg-surface border border-border/50 text-[10px] space-y-2 animate-in fade-in slide-in-from-top-1">
+          {claimEvidence.length > 0 ? (
+            claimEvidence.map(ev => (
+              <div key={ev.id} className="border-b border-border/30 pb-1.5 last:border-0 last:pb-0">
+                <div className="font-semibold text-foreground">{ev.title}</div>
+                <div className="text-muted line-clamp-2 mt-0.5">{ev.summary}</div>
+              </div>
+            ))
+          ) : (
+            <div className="text-muted">No direct evidence loaded for this claim yet.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function MacroAnalysisPanel({
@@ -63,54 +130,73 @@ export default function MacroAnalysisPanel({
   const globalSlice = useStore((s) =>
     activeTopicId != null ? s.globalOverviewByTopic[activeTopicId] : undefined
   );
+  const {
+    snapshots,
+    claims,
+    evidence,
+    deltas,
+    overviewArtifact,
+    evolutionArtifact,
+    loadingSnapshots,
+    loadingClaims,
+    loadingEvidence,
+    loadingEvolution,
+    generatingEvolution,
+    knowledgeError,
+    refreshKnowledge,
+    triggerEvolution,
+  } = useTopicKnowledgeData(activeTopicId);
 
-  const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
-  const [loadingSnapshots, setLoadingSnapshots] = useState(false);
-  const [keptArticles, setKeptArticles] = useState<Article[]>([]);
-  const [loadingArticles, setLoadingArticles] = useState(false);
-  const [showArticles, setShowArticles] = useState(true);
+  const globalContent = overviewArtifact?.content ?? globalSlice?.content ?? "";
+  const globalGenerating = globalSlice?.isGenerating ?? false;
+  const [expandedSnapshotIds, setExpandedSnapshotIds] = useState<number[]>([]);
 
   useEffect(() => {
     if (activeTopicId == null) return;
-    setLoadingSnapshots(true);
-    setLoadingArticles(true);
     void hydrateGlobalOverview(activeTopicId);
-    fetchSnapshots(activeTopicId)
-      .then((rows) => setSnapshots(rows))
-      .finally(() => setLoadingSnapshots(false));
-    fetchKeptArticles(activeTopicId)
-      .then((arts) => setKeptArticles(arts))
-      .finally(() => setLoadingArticles(false));
   }, [activeTopicId, hydrateGlobalOverview]);
-
-  const globalContent = globalSlice?.content ?? "";
-  const globalGenerating = globalSlice?.isGenerating ?? false;
 
   const handleGenerate = () => {
     if (activeTopicId == null || globalGenerating) return;
     void startGlobalOverviewGeneration(activeTopicId);
   };
 
-  const handleSnapshotDeleted = (id: number) =>
-    setSnapshots((prev) => prev.filter((s) => s.id !== id));
-
-  const handleSnapshotUpdated = (id: number, content: string) =>
-    setSnapshots((prev) => prev.map((s) => (s.id === id ? { ...s, overview_content: content } : s)));
-
-  const handleArticleDeleted = (id: string) =>
-    setKeptArticles((prev) => prev.filter((a) => a.id !== id));
-
-  const handleArticleUnkept = (id: string) =>
-    setKeptArticles((prev) => prev.filter((a) => a.id !== id));
+  const toggleSnapshot = (snapshotId: number) => {
+    setExpandedSnapshotIds((current) =>
+      current.includes(snapshotId)
+        ? current.filter((id) => id !== snapshotId)
+        : [...current, snapshotId],
+    );
+  };
 
   return (
     <div className="space-y-4">
+      {knowledgeError ? (
+        <div className="rounded-lg border border-important/30 bg-important/5 p-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 text-important" />
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-foreground">
+                Knowledge workspace unavailable
+              </p>
+              <p className="mt-1 text-[11px] text-muted">{knowledgeError}</p>
+            </div>
+            <button
+              onClick={() => void refreshKnowledge()}
+              className="rounded-md px-2 py-1 text-[10px] font-medium text-accent hover:bg-accent/10"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {/* Global Overview */}
-      <div className="rounded-lg border border-border/60 bg-surface/40 p-3">
+      <div className="rounded-lg border border-border bg-surface shadow-sm p-3">
         <div className="flex items-center justify-between gap-2 mb-2">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5">
             <Sparkles className="w-3.5 h-3.5 text-accent" />
-            Global Overview
+            Knowledge Overview
           </h3>
           <button
             onClick={handleGenerate}
@@ -146,76 +232,104 @@ export default function MacroAnalysisPanel({
         ) : null}
       </div>
 
-      {/* Historical Snapshots */}
-      <div className="rounded-lg border border-border/60 bg-surface/40 p-3">
+      {/* Claims */}
+      <div className="rounded-lg border border-border bg-surface shadow-sm p-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5 mb-2">
-          <BookOpen className="w-3.5 h-3.5" />
-          Historical Snapshots
+          <FileText className="w-3.5 h-3.5" />
+          Working Claims
         </h3>
-        {loadingSnapshots ? (
+        {loadingClaims ? (
           <p className="text-[10px] text-muted">Loading…</p>
-        ) : snapshots.length === 0 ? (
-          <p className="text-[10px] text-muted">No snapshots yet.</p>
+        ) : claims.length === 0 ? (
+          <p className="text-[10px] text-muted">No claims yet.</p>
         ) : (
           <div className="space-y-2">
-            {snapshots.map((s) => (
-              <SnapshotRow
-                key={s.id}
-                snapshot={s}
-                topicId={activeTopicId!}
-                onDeleted={handleSnapshotDeleted}
-                onUpdated={handleSnapshotUpdated}
-              />
+            {claims.slice(0, 10).map((claim) => (
+              <ClaimCard key={claim.id} claim={claim} evidence={evidence} />
             ))}
           </div>
         )}
       </div>
 
-      {/* Core Articles (Knowledge Base) */}
+      {/* Evidence */}
       <div className="rounded-lg border border-border/60 bg-surface/40 p-3">
-        <button
-          onClick={() => setShowArticles((v) => !v)}
-          className="w-full flex items-center justify-between gap-1.5 mb-2"
-        >
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5">
-            <Database className="w-3.5 h-3.5" />
-            Core Articles
-            {keptArticles.length > 0 && (
-              <span className="text-[9px] bg-accent/15 text-accent px-1 py-0.5 rounded font-bold">
-                {keptArticles.length}
-              </span>
-            )}
-          </h3>
-          {showArticles ? (
-            <ChevronUp className="w-3.5 h-3.5 text-muted" />
-          ) : (
-            <ChevronDown className="w-3.5 h-3.5 text-muted" />
-          )}
-        </button>
-
-        {showArticles && (
-          <>
-            {loadingArticles ? (
-              <p className="text-[10px] text-muted">Loading…</p>
-            ) : keptArticles.length === 0 ? (
-              <p className="text-[10px] text-muted">
-                No core articles yet. Right-click articles and save to Knowledge Base.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {keptArticles.map((art) => (
-                  <ArticleRow
-                    key={art.id}
-                    article={art}
-                    onDeleted={handleArticleDeleted}
-                    onUnkept={handleArticleUnkept}
-                  />
-                ))}
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5 mb-2">
+          <Database className="w-3.5 h-3.5" />
+          Evidence Sets
+        </h3>
+        {loadingEvidence ? (
+          <p className="text-[10px] text-muted">Loading…</p>
+        ) : evidence.length === 0 ? (
+          <p className="text-[10px] text-muted">
+            No supporting signals have been collected yet.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {evidence.slice(0, 10).map((item) => (
+              <div key={item.id} className="rounded-md border border-border/50 bg-surface/60 p-2">
+                <p className="text-[11px] font-semibold leading-snug">{item.title}</p>
+                <p className="text-[10px] text-muted mt-1">{item.summary}</p>
+                <div className="mt-1 text-[9px] text-muted space-y-0.5">
+                  <div>Signal type: {item.signal_type ?? item.evidence_type}</div>
+                  <div>Direction: {item.stance}</div>
+                  <div>
+                    Topic match: {Math.round(((item.support_score ?? item.confidence) || 0) * 100)}%
+                  </div>
+                  <div>{getReviewStateLabel(item.review_state)}</div>
+                </div>
               </div>
-            )}
-          </>
+            ))}
+          </div>
         )}
       </div>
+
+      {/* Temporal Snapshots */}
+      <div className="rounded-lg border border-border/60 bg-surface/40 p-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5 mb-2">
+          <BookOpen className="w-3.5 h-3.5" />
+          Snapshot Timeline
+        </h3>
+        {loadingSnapshots ? (
+          <p className="text-[10px] text-muted">Loading…</p>
+        ) : snapshots.length === 0 ? (
+          <p className="text-[10px] text-muted">No temporal snapshots yet.</p>
+        ) : (
+          <div className="space-y-2">
+            <div className="text-[10px] text-muted">
+              Showing {Math.min(snapshots.length, 6)} of {snapshots.length} timeline updates
+            </div>
+            {snapshots.slice(0, 6).map((snapshot) => (
+              <div key={snapshot.id} className="rounded-md border border-border/50 bg-surface/60 p-2">
+                <div className="flex items-center justify-between gap-2 text-[10px] text-muted">
+                  <span>{new Date(snapshot.created_at + "Z").toLocaleString()}</span>
+                  <span>{getSnapshotStatusLabel(snapshot.snapshot_status)}</span>
+                </div>
+                <div
+                  className={`mt-1 text-[11px] text-foreground whitespace-pre-wrap ${
+                    expandedSnapshotIds.includes(snapshot.id) ? "" : "line-clamp-5"
+                  }`}
+                >
+                  {snapshot.summary_text}
+                </div>
+                <button
+                  onClick={() => toggleSnapshot(snapshot.id)}
+                  className="mt-2 text-[10px] font-medium text-accent hover:underline"
+                >
+                  {expandedSnapshotIds.includes(snapshot.id) ? "Show less" : "Show full note"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <EvolutionPanel
+        deltas={deltas}
+        artifact={evolutionArtifact}
+        loading={loadingEvolution}
+        generating={generatingEvolution}
+        onGenerate={() => void triggerEvolution()}
+      />
 
       {/* Macro Signals */}
       <div className="rounded-lg border border-border/60 bg-surface/40 p-3">
@@ -226,7 +340,7 @@ export default function MacroAnalysisPanel({
         {trending ? (
           <div className="space-y-2">
             <div className="text-[10px] text-muted">
-              Avg Topic Relevance:{" "}
+              Average Topic Match:{" "}
               <span className="text-foreground font-semibold">
                 {Math.round((trending.avg_topic_relevance || 0) * 100)}%
               </span>
@@ -249,251 +363,6 @@ export default function MacroAnalysisPanel({
           <p className="text-[10px] text-muted">No macro signals yet.</p>
         )}
       </div>
-    </div>
-  );
-}
-
-function SnapshotRow({
-  snapshot,
-  topicId,
-  onDeleted,
-  onUpdated,
-}: {
-  snapshot: Snapshot;
-  topicId: number;
-  onDeleted: (id: number) => void;
-  onUpdated: (id: number, content: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [content, setContent] = useState(snapshot.overview_content);
-  const [isSaving, setIsSaving] = useState(false);
-
-  let statsStr = "";
-  try {
-    const stats = JSON.parse(snapshot.stats_metadata);
-    statsStr = `${stats.total_articles} articles · ${stats.important_count} important`;
-    if (stats.trend_delta !== undefined)
-      statsStr += ` · ${stats.trend_delta > 0 ? "+" : ""}${stats.trend_delta} trend`;
-  } catch {
-    // ignore
-  }
-
-  const handleSave = async () => {
-    setIsSaving(true);
-    const ok = await updateSnapshot(snapshot.id, content);
-    if (ok) {
-      onUpdated(snapshot.id, content);
-      setIsEditing(false);
-    }
-    setIsSaving(false);
-  };
-
-  const handleDelete = async () => {
-    if (!confirm("Delete this snapshot permanently?")) return;
-    const ok = await deleteSnapshot(snapshot.id, topicId);
-    if (ok) onDeleted(snapshot.id);
-  };
-
-  return (
-    <div className="rounded-md border border-border/50 bg-surface/60 overflow-hidden">
-      {/* header row */}
-      <div className="flex items-center gap-2 px-2 py-1.5">
-        <button
-          onClick={() => { if (!isEditing) setExpanded((v) => !v); }}
-          className="flex-1 text-left"
-        >
-          <div className="text-[10px] text-muted flex items-center gap-1">
-            <Clock3 className="w-3 h-3 shrink-0" />
-            {new Date(snapshot.created_at + "Z").toLocaleString()}
-          </div>
-          {statsStr && (
-            <p className="text-[9px] text-muted/70 mt-0.5">{statsStr}</p>
-          )}
-        </button>
-        <div className="flex items-center gap-0.5 shrink-0">
-          {isEditing ? (
-            <>
-              <button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="p-1 rounded text-emerald-500 hover:bg-emerald-500/10 transition-colors"
-              >
-                <Check className="w-3 h-3" />
-              </button>
-              <button
-                onClick={() => { setContent(snapshot.overview_content); setIsEditing(false); }}
-                className="p-1 rounded text-muted hover:bg-surface-hover transition-colors"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={() => { setExpanded(true); setIsEditing(true); }}
-                className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-hover transition-colors"
-                title="Edit"
-              >
-                <Edit3 className="w-3 h-3" />
-              </button>
-              <button
-                onClick={handleDelete}
-                className="p-1 rounded text-red-500 hover:bg-red-500/10 transition-colors"
-                title="Delete"
-              >
-                <Trash2 className="w-3 h-3" />
-              </button>
-              <button
-                onClick={() => setExpanded((v) => !v)}
-                className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-hover transition-colors"
-              >
-                {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* expanded content */}
-      {expanded && (
-        <div className="border-t border-border/40 px-2 py-2">
-          {isEditing ? (
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="w-full h-48 p-2 rounded bg-background border border-border text-[11px] resize-y focus:outline-none focus:border-accent"
-            />
-          ) : (
-            <div className="prose prose-sm prose-invert max-w-none text-[11px] text-muted leading-relaxed whitespace-pre-wrap">
-              {content}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ArticleRow({
-  article,
-  onDeleted,
-  onUnkept,
-}: {
-  article: Article;
-  onDeleted: (id: string) => void;
-  onUnkept: (id: string) => void;
-}) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [title, setTitle] = useState(article.title);
-  const [summary, setSummary] = useState(article.summary || "");
-  const [tagsStr, setTagsStr] = useState(tagsJsonToComma(article.tags));
-  const [isSaving, setIsSaving] = useState(false);
-
-  const handleSave = async () => {
-    setIsSaving(true);
-    const tags = tagsStr.split(",").map((t) => t.trim()).filter(Boolean);
-    const ok = await updateArticle(article.id, title, summary, tags);
-    if (ok) setIsEditing(false);
-    setIsSaving(false);
-  };
-
-  const handleDelete = async () => {
-    if (!confirm("Delete this article permanently?")) return;
-    const ok = await deleteArticle(article.id);
-    if (ok) onDeleted(article.id);
-  };
-
-  const handleRemoveKept = async () => {
-    const ok = await toggleArticleKept(article.id, false);
-    if (ok) onUnkept(article.id);
-  };
-
-  return (
-    <div className="rounded-md border border-border/50 bg-surface/60 p-2">
-      <div className="flex items-start gap-2">
-        <div className="flex-1 min-w-0">
-          {isEditing ? (
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="w-full px-1.5 py-0.5 mb-1 bg-background border border-border rounded text-[11px] font-semibold focus:outline-none focus:border-accent"
-            />
-          ) : (
-            <p className="text-[11px] font-semibold leading-snug line-clamp-2 mb-0.5">{title}</p>
-          )}
-          <div className="text-[9px] text-muted flex items-center gap-1.5 flex-wrap">
-            <span className="uppercase">{article.source || "web"}</span>
-            <span>·</span>
-            <span>Score {article.importance}/10</span>
-            {article.published_at && (
-              <>
-                <span>·</span>
-                <span>{article.published_at.slice(0, 10)}</span>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-0.5 shrink-0">
-          {isEditing ? (
-            <>
-              <button onClick={handleSave} disabled={isSaving} className="p-1 rounded text-emerald-500 hover:bg-emerald-500/10">
-                <Check className="w-3 h-3" />
-              </button>
-              <button onClick={() => setIsEditing(false)} className="p-1 rounded text-muted hover:bg-surface-hover">
-                <X className="w-3 h-3" />
-              </button>
-            </>
-          ) : (
-            <>
-              {article.url && (
-                <a href={article.url} target="_blank" rel="noreferrer" className="p-1 rounded text-muted hover:bg-surface-hover hover:text-accent">
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              )}
-              <button onClick={handleRemoveKept} title="Remove from Knowledge Base" className="p-1 rounded text-accent hover:bg-surface-hover">
-                <Bookmark className="w-3 h-3 fill-current" />
-              </button>
-              <button onClick={() => setIsEditing(true)} className="p-1 rounded text-muted hover:bg-surface-hover hover:text-foreground">
-                <Edit3 className="w-3 h-3" />
-              </button>
-              <button onClick={handleDelete} className="p-1 rounded text-red-500 hover:bg-red-500/10">
-                <Trash2 className="w-3 h-3" />
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-
-      {isEditing && (
-        <div className="mt-2 space-y-1.5">
-          <textarea
-            value={summary}
-            onChange={(e) => setSummary(e.target.value)}
-            className="w-full h-16 p-1.5 rounded bg-background border border-border text-[10px] resize-y focus:outline-none focus:border-accent"
-            placeholder="Summary…"
-          />
-          <input
-            value={tagsStr}
-            onChange={(e) => setTagsStr(e.target.value)}
-            className="w-full px-1.5 py-0.5 bg-background border border-border rounded text-[10px] focus:outline-none focus:border-accent"
-            placeholder="Tags (comma separated)…"
-          />
-        </div>
-      )}
-
-      {!isEditing && summary && (
-        <p className="text-[10px] text-muted mt-1 line-clamp-2 leading-relaxed">{summary}</p>
-      )}
-      {!isEditing && parseTagsArray(article.tags).length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-1">
-          {parseTagsArray(article.tags).slice(0, 4).map((tag) => (
-            <span key={tag} className="px-1 py-0.5 rounded text-[9px] bg-surface-hover text-muted">
-              {tag}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

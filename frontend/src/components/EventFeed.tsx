@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import {
+  AlertTriangle,
   Loader2,
   Inbox,
   LayoutList,
@@ -51,6 +52,8 @@ export default function EventFeed() {
   } = useStore();
 
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [viewMode, setViewMode] = useState<ViewMode>("events");
   const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>("all");
   const [sortMode, setSortMode] = useState<SortMode>("relevance");
@@ -66,19 +69,30 @@ export default function EventFeed() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError(null);
     if (viewMode === "events") {
       fetchEvents(activeTopicId, 50, 0, sortMode, "active")
-        .then((data) => { if (!cancelled) setEvents(data.events); })
-        .catch((e) => { if (process.env.NODE_ENV === "development") console.warn("[fetch]", e); })
+        .then((data) => {
+          if (!cancelled) setEvents(data.events);
+        })
+        .catch((e) => {
+          if (process.env.NODE_ENV === "development") console.warn("[fetch]", e);
+          if (!cancelled) setError("Failed to load event activity. Please retry.");
+        })
         .finally(() => { if (!cancelled) setLoading(false); });
     } else {
       fetchArticles(50, 0, activeTopicId, sortMode, "active")
-        .then((data) => { if (!cancelled) setArticles(data.articles); })
-        .catch((e) => { if (process.env.NODE_ENV === "development") console.warn("[fetch]", e); })
+        .then((data) => {
+          if (!cancelled) setArticles(data.articles);
+        })
+        .catch((e) => {
+          if (process.env.NODE_ENV === "development") console.warn("[fetch]", e);
+          if (!cancelled) setError("Failed to load source articles. Please retry.");
+        })
         .finally(() => { if (!cancelled) setLoading(false); });
     }
     return () => { cancelled = true; };
-  }, [activeTopicId, viewMode, sortMode, setArticles, insightRefreshKey]);
+  }, [activeTopicId, viewMode, sortMode, setArticles, insightRefreshKey, reloadKey]);
 
   // Fetch archived count
   useEffect(() => {
@@ -184,26 +198,44 @@ export default function EventFeed() {
 
   if (loading) {
     return (
-      <div className="flex-3 min-w-[260px] flex items-center justify-center border-r border-border">
+      <div className="flex-[3] min-w-[260px] flex items-center justify-center border-r border-border">
         <Loader2 className="w-6 h-6 text-accent animate-spin" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex-[3] min-w-[260px] flex flex-col items-center justify-center gap-3 border-r border-border px-6 text-center">
+        <AlertTriangle className="h-10 w-10 text-important" />
+        <div>
+          <p className="text-sm font-medium">Activity feed unavailable</p>
+          <p className="mt-1 text-xs text-muted">{error}</p>
+        </div>
+        <button
+          onClick={() => setReloadKey((value) => value + 1)}
+          className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
+        >
+          Retry
+        </button>
       </div>
     );
   }
 
   if (rawItems.length === 0 && archivedCount === 0) {
     return (
-      <div className="flex-3 min-w-[260px] flex flex-col items-center justify-center text-muted gap-3 border-r border-border">
+      <div className="flex-[3] min-w-[260px] flex flex-col items-center justify-center text-muted gap-3 border-r border-border">
         <Inbox className="w-12 h-12" />
-        <p className="text-sm">No articles yet.</p>
+        <p className="text-sm">No monitoring items yet.</p>
         <p className="text-xs">
-          Add keywords and click &quot;Fetch Now&quot; to get started.
+          Add keywords in Research Setup, then click &quot;Fetch Now&quot; to start building this topic workspace.
         </p>
       </div>
     );
   }
 
   return (
-    <div className="flex-3 min-w-[260px] flex flex-col overflow-hidden border-r border-border">
+    <div className="flex-[3] min-w-[260px] flex flex-col overflow-hidden border-r border-border">
       {/* Toolbar */}
       <div className="px-4 py-2 border-b border-border space-y-2">
         {/* View mode */}
@@ -239,10 +271,10 @@ export default function EventFeed() {
                   ? "bg-important/15 text-important"
                   : "text-muted hover:text-foreground hover:bg-surface-hover"
               }`}
-              title="Sort by importance"
+              title="Sort by priority"
             >
               <ArrowDownWideNarrow className="w-3 h-3" />
-              Relevance
+              Priority
             </button>
             <button
               onClick={() => setSortMode("latest")}

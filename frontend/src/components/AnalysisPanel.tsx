@@ -16,6 +16,7 @@ import {
   Clock,
 } from "lucide-react";
 import { useStore } from "@/stores/useStore";
+import { timeAgo } from "@/lib/utils";
 import {
   fetchInsightSummary,
   fetchTopicInsight,
@@ -43,16 +44,6 @@ const EMPTY_INSIGHT: TopicInsight = {
   top_tags: [],
 };
 
-function timeAgo(iso: string | null): string {
-  if (!iso) return "";
-  const diff = Date.now() - new Date(iso + "Z").getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
 
 export default function AnalysisPanel() {
   const activeTopicId = useStore((s) => s.activeTopicId);
@@ -231,7 +222,7 @@ export default function AnalysisPanel() {
           />
           <StatCard
             icon={<TrendingUp className="w-3.5 h-3.5 text-accent" />}
-            label="Relevance"
+            label="Topic Match"
             value={avgRelevance > 0 ? `${Math.round(avgRelevance * 100)}%` : "—"}
             valueColor="text-accent"
           />
@@ -266,9 +257,9 @@ export default function AnalysisPanel() {
   );
 
   return (
-    <div className="flex-4 min-w-[320px] bg-surface/30 overflow-y-auto flex flex-col relative">
+    <div className="flex-[4] min-w-[320px] bg-surface border-l border-border overflow-y-auto flex flex-col relative">
       <div className="p-4 space-y-4 flex-1">
-        <div className="rounded-lg border border-border/60 p-1 bg-surface/50">
+        <div className="rounded-lg border border-border p-1 bg-surface shadow-sm">
           <div className="grid grid-cols-2 gap-1">
             <button
               onClick={() => setActiveTab("realtime")}
@@ -284,7 +275,7 @@ export default function AnalysisPanel() {
                 activeTab === "overview" ? "bg-accent/20 text-accent" : "text-muted hover:text-foreground"
               }`}
             >
-              Overview
+              Knowledge
             </button>
           </div>
         </div>
@@ -314,7 +305,7 @@ function StatCard({
   valueColor?: string;
 }) {
   return (
-    <div className="px-2.5 py-2 rounded-lg bg-surface/60 border border-border/50">
+    <div className="px-2.5 py-2 rounded-lg bg-background border border-border shadow-sm">
       <div className="flex items-center gap-1.5 mb-0.5">
         {icon}
         <span className="text-[9px] text-muted uppercase">{label}</span>
