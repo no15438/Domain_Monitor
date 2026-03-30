@@ -6,6 +6,7 @@ log = logging.getLogger("scheduler")
 _scheduler: BackgroundScheduler | None = None
 
 SUMMARY_REFRESH_MINUTES = 60
+METABOLISM_REFRESH_MINUTES = 30
 
 
 def start_scheduler():
@@ -19,6 +20,13 @@ def start_scheduler():
         max_instances=1,
     )
     _scheduler.add_job(
+        _metabolism_job,
+        "interval",
+        minutes=METABOLISM_REFRESH_MINUTES,
+        id="metabolism_job",
+        max_instances=1,
+    )
+    _scheduler.add_job(
         _summary_job,
         "interval",
         minutes=SUMMARY_REFRESH_MINUTES,
@@ -27,8 +35,8 @@ def start_scheduler():
     )
     _scheduler.start()
     log.info(
-        "started — fetch every %d min, summaries every %d min",
-        settings.fetch_interval_minutes, SUMMARY_REFRESH_MINUTES,
+        "started — fetch every %d min, metabolism every %d min, summaries every %d min",
+        settings.fetch_interval_minutes, METABOLISM_REFRESH_MINUTES, SUMMARY_REFRESH_MINUTES,
     )
 
 
@@ -80,4 +88,24 @@ def _summary_job():
         _main._bg_finish(key, result="summaries refreshed")
     except Exception as e:
         log.error("summary error: %s", e)
+        _main._bg_finish(key, error=str(e))
+
+
+def _metabolism_job():
+    from claim_lifecycle import refresh_recent_topic_lifecycles
+    from database import get_topics
+    import main as _main
+
+    key = "metabolism-all"
+    if not _main._bg_try_start(key):
+        log.info("metabolism job skipping — already running")
+        return
+
+    try:
+        topics = [t["id"] for t in get_topics() if t.get("is_active", 1)]
+        refresh_recent_topic_lifecycles(topics, source="scheduler")
+        log.info("knowledge metabolism refreshed for %d topics", len(topics))
+        _main._bg_finish(key, result=f"metabolism refreshed for {len(topics)} topics")
+    except Exception as e:
+        log.error("metabolism error: %s", e)
         _main._bg_finish(key, error=str(e))

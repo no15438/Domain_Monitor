@@ -43,14 +43,23 @@ def _normalize_date(raw: str) -> str:
 
 from llm_client import llm_chat
 from database import (
+    add_claim_evolution,
     get_recent_urls,
     get_recent_article_stubs,
+    get_claims_v2,
     insert_article,
+    insert_raw_news,
     get_keywords,
     get_topics,
     get_topic_feeds,
+    replace_event_sources,
+    update_article_event_fields,
+    upsert_claim,
+    upsert_evidence_set,
+    upsert_event,
 )
-from vector_store import add_article
+from claim_lifecycle import evaluate_claim_lifecycle
+from vector_store import add_claim_document, add_evidence_document, add_event_document
 from relevance import (
     normalize_url,
     dedup_by_similarity,
@@ -84,6 +93,8 @@ Each object must have:
 - "sentiment": "positive" | "negative" | "neutral" — from this research direction's perspective
 - "importance": integer 1-10 (10 = directly addresses a key research angle)
 - "topic_relevance": float 0.0-1.0
+- "claim_kind": "observation" | "forecast" | "trend" | "structural"
+- "signal_type": short plain-language label for the evidence signal, e.g. "market signal", "policy signal", "capacity signal"
 - "key_entities": array of up to 5 relevant entities
 - "topic_analysis": 1 sentence on how the article relates to the research, same language
 
@@ -93,6 +104,65 @@ Return ONLY a valid JSON array. No markdown fences, no explanation."""
 # MLX runs inference sequentially; batching reduces call overhead dramatically.
 BATCH_SIZE = 4
 MAX_ENRICH = 12
+
+
+def _coerce_float(value, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _serialize_raw_news(topic_id: int, items: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for item in items:
+        raw_id = item.get("_raw_news_id") or str(uuid.uuid4())
+        item["_raw_news_id"] = raw_id
+        rows.append(
+            {
+                "id": raw_id,
+                "topic_id": topic_id,
+                "article_id": None,
+                "url": item.get("url", ""),
+                "normalized_url": item.get("url", ""),
+                "title": item.get("title", ""),
+                "content": item.get("content", "") or "",
+                "source": item.get("source", ""),
+                "source_type": item.get("_source_type", ""),
+                "published_at": _normalize_date(item.get("published_date", "")),
+                "fetched_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
+                "novelty_score": _coerce_float(item.get("_source_score"), 0.0),
+                "noise_score": 0.0,
+                "authority_score": _coerce_float((item.get("_source_breakdown") or {}).get("authority"), 0.0),
+                "freshness_state": "hot",
+                "retention_until": None,
+                "metadata_json": json.dumps(
+                    {
+                        "source_breakdown": item.get("_source_breakdown", {}),
+                        "event_id": item.get("_event_id"),
+                        "event_size": item.get("_event_size", 1),
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        )
+    return rows
+
+
+def _build_claim_text(item: dict, parsed: dict) -> tuple[str, str]:
+    statement = (parsed.get("topic_analysis") or parsed.get("summary") or item.get("title") or "").strip()
+    summary = (parsed.get("summary") or parsed.get("topic_analysis") or item.get("title") or "").strip()
+    if not statement:
+        statement = item.get("title", "").strip()
+    if len(statement) > 240:
+        statement = statement[:237].rstrip() + "..."
+    if len(summary) > 240:
+        summary = summary[:237].rstrip() + "..."
+    return statement, summary
+
+
+def _statement_key(text: str) -> str:
+    return " ".join((text or "").strip().lower().split())
 
 
 # ── Stage 1: COLLECT (Recall — no LLM, parallel HTTP) ────────────
@@ -240,9 +310,19 @@ _DEFAULT_PARSED = {
     "sentiment": "neutral",
     "importance": 5,
     "topic_relevance": 0.5,
+    "claim_kind": "observation",
+    "signal_type": "market signal",
     "key_entities": [],
     "topic_analysis": "",
 }
+
+
+ALLOWED_CLAIM_KINDS = {"observation", "forecast", "trend", "structural"}
+
+
+def _normalize_claim_kind(value: str | None) -> str:
+    candidate = (value or "").strip().lower()
+    return candidate if candidate in ALLOWED_CLAIM_KINDS else "observation"
 
 
 def _call_batch_llm(
@@ -298,6 +378,14 @@ def _enrich_and_store(
     new_items: list[dict] = []
     for item in canonicals:
         if item["url"] in existing_urls:
+            # Article already in DB — keep event_size in sync so the badge
+            # stays accurate even if the cluster size grew since first insert.
+            update_article_event_fields(
+                url=item["url"],
+                event_id=item.get("_event_id", ""),
+                is_canonical=1,
+                event_size=item.get("_event_size", 1),
+            )
             continue
         existing_urls.add(item["url"])
         new_items.append(item)
@@ -307,6 +395,9 @@ def _enrich_and_store(
 
     # Process in batches of BATCH_SIZE — each batch = one LLM call
     new_articles: list[dict] = []
+    touched_claim_ids: list[str] = []
+    existing_claims = get_claims_v2(topic_id, limit=300) if topic_id is not None else []
+    claim_index = {_statement_key(c.get("statement", "")): c for c in existing_claims}
     for batch_start in range(0, len(new_items), BATCH_SIZE):
         batch = new_items[batch_start: batch_start + BATCH_SIZE]
         parsed_list = _call_batch_llm(batch, context_params)
@@ -343,20 +434,152 @@ def _enrich_and_store(
                 f"{item['title']}. {parsed.get('summary', '')}. "
                 f"{(item.get('content') or '')[:500]}"
             )
-            meta = {
-                "title": item["title"],
-                "url": item["url"],
-                "source": item.get("source", ""),
-                "sentiment": parsed.get("sentiment", "neutral"),
-            }
-            if topic_id is not None:
-                meta["topic_id"] = str(topic_id)
-            add_article(article_id, vector_text, meta)
             new_articles.append(article)
+
+            if topic_id is not None:
+                event_id = item.get("_event_id") or f"evt-{uuid.uuid4().hex[:12]}"
+                last_seen_at = article["published_at"] or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                event_title = item.get("title") or parsed.get("summary") or "Untitled event"
+                event_summary = parsed.get("summary") or parsed.get("topic_analysis") or ""
+                event_status = "stabilized" if item.get("_event_size", 1) >= 3 else "active"
+                upsert_event(
+                    topic_id=topic_id,
+                    event_id=event_id,
+                    event_key=event_id,
+                    title=event_title,
+                    summary=event_summary,
+                    status=event_status,
+                    canonical_article_id=article_id,
+                    first_seen_at=last_seen_at,
+                    last_seen_at=last_seen_at,
+                    novelty_window_end=last_seen_at,
+                    stability_score=min(1.0, item.get("_event_size", 1) / 5),
+                    fact_confidence=min(1.0, _coerce_float(parsed.get("topic_relevance"), 0.5)),
+                    metadata={
+                        "source_score": item.get("_source_score", 0),
+                        "importance": article["importance"],
+                        "sentiment": article["sentiment"],
+                    },
+                )
+
+                statement, claim_summary = _build_claim_text(item, parsed)
+                claim_key = _statement_key(statement)
+                previous_claim = claim_index.get(claim_key)
+                evidence_id = f"evidence-{event_id}"
+                claim_id = upsert_claim(
+                    topic_id=topic_id,
+                    statement=statement,
+                    claim_type=_normalize_claim_kind(parsed.get("claim_kind")),
+                    summary=claim_summary,
+                    status="active",
+                    supporting_evidence_ids=[evidence_id],
+                    decay_policy="slow" if article["importance"] >= 8 else "medium",
+                    staleness_status="fresh",
+                    metadata={
+                        "event_id": event_id,
+                        "article_id": article_id,
+                        "topic_analysis": parsed.get("topic_analysis", ""),
+                    },
+                )
+                if previous_claim:
+                    add_claim_evolution(
+                        topic_id=topic_id,
+                        claim_id=claim_id,
+                        previous_claim_id=previous_claim["id"],
+                        relation_type="strengthened",
+                        reason="new supporting evidence from fresh event coverage",
+                        metadata={"event_id": event_id, "article_id": article_id},
+                    )
+                claim_index[claim_key] = {
+                    "id": claim_id,
+                    "statement": statement,
+                }
+                if claim_id not in touched_claim_ids:
+                    touched_claim_ids.append(claim_id)
+
+                upsert_evidence_set(
+                    evidence_id=evidence_id,
+                    topic_id=topic_id,
+                    event_id=event_id,
+                    claim_id=claim_id,
+                    title=event_title,
+                    summary=claim_summary,
+                    evidence_type=(parsed.get("signal_type") or "market signal").strip()[:40] or "market signal",
+                    stance="supporting",
+                    confidence=min(1.0, _coerce_float(parsed.get("topic_relevance"), 0.5)),
+                    freshness_half_life=14.0 if article["importance"] >= 8 else 7.0,
+                    supporting_event_ids=[event_id],
+                    contradicting_event_ids=[],
+                    metadata={
+                        "article_id": article_id,
+                        "source": article["source"],
+                        "url": article["url"],
+                        "published_at": article["published_at"],
+                        "last_seen_at": last_seen_at,
+                    },
+                )
+
+                event_source_rows = [
+                    {
+                        "event_id": event_id,
+                        "raw_news_id": item.get("_raw_news_id"),
+                        "article_id": article_id,
+                        "source_rank": 1,
+                        "source_role": "canonical",
+                        "is_canonical": 1,
+                        "metadata_json": json.dumps({"url": article["url"]}, ensure_ascii=False),
+                    }
+                ]
+
+                add_event_document(
+                    event_id,
+                    f"{event_title}\n{event_summary}\nSource: {article['source']}\nSentiment: {article['sentiment']}",
+                    {
+                        "topic_id": str(topic_id),
+                        "status": event_status,
+                        "event_status": event_status,
+                        "title": event_title,
+                        "source": article["source"],
+                        "url": article["url"],
+                        "last_seen_at": last_seen_at,
+                        "novelty_score": str(item.get("_source_score", 0)),
+                    },
+                )
+                add_evidence_document(
+                    evidence_id,
+                    f"{event_title}\n{claim_summary}\nEvidence from {article['source']}\n{vector_text}",
+                    {
+                        "topic_id": str(topic_id),
+                        "status": "active",
+                        "claim_id": claim_id,
+                        "event_id": event_id,
+                        "title": event_title,
+                        "url": article["url"],
+                    },
+                )
+                add_claim_document(
+                    claim_id,
+                    f"{statement}\n{claim_summary}\nEvent: {event_title}",
+                    {
+                        "topic_id": str(topic_id),
+                        "status": "active",
+                        "claim_type": _normalize_claim_kind(parsed.get("claim_kind")),
+                        "event_id": event_id,
+                        "title": event_title,
+                    },
+                )
 
             # Store non-canonical cluster members (no LLM enrichment)
             for alt in item.get("_cluster_alts", []):
                 if alt["url"] in existing_urls:
+                    # Article already in DB — update event linkage so
+                    # get_event_alternatives() can find it by the current event_id.
+                    update_article_event_fields(
+                        url=alt["url"],
+                        event_id=alt.get("_event_id", ""),
+                        is_canonical=0,
+                        event_size=alt.get("_event_size", 1),
+                    )
                     continue
                 existing_urls.add(alt["url"])
                 alt_breakdown = alt.get("_source_breakdown", {})
@@ -382,6 +605,29 @@ def _enrich_and_store(
                     "key_entities": "[]",
                     "topic_analysis": "",
                 })
+                if topic_id is not None:
+                    event_source_rows.append(
+                        {
+                            "event_id": event_id,
+                            "raw_news_id": alt.get("_raw_news_id"),
+                            "article_id": None,
+                            "source_rank": len(event_source_rows) + 1,
+                            "source_role": "supporting",
+                            "is_canonical": 0,
+                            "metadata_json": json.dumps(
+                                {
+                                    "url": alt.get("url"),
+                                    "source": alt.get("source", ""),
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    )
+            if topic_id is not None:
+                replace_event_sources(event_id, event_source_rows)
+
+    if topic_id is not None and touched_claim_ids:
+        evaluate_claim_lifecycle(topic_id, touched_claim_ids=touched_claim_ids, source="pipeline")
 
     return new_articles
 
@@ -444,6 +690,10 @@ def _run_for_topic(topic_id: int, existing_urls: set[str]) -> list[dict]:
     sem_unique = _semantic_dedup(url_unique, existing_stubs=existing_stubs,
                                   within_threshold=dedup_threshold,
                                   cross_threshold=crossrun_dedup_threshold)
+
+    # Persist normalized ingest records before relevance/canonical selection so
+    # downstream entities can keep provenance to the source material.
+    insert_raw_news(_serialize_raw_news(topic_id, sem_unique))
 
     # Stage 3: RELEVANCE FILTER — uses topic-level min score
     relevance_terms = keyword_list + [e for e in entities] + [g for g in geo_scope]
