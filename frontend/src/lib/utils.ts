@@ -35,12 +35,17 @@ export function parseTags(tags: string | null | undefined): string[] {
 
 /**
  * Returns a human-readable time-ago label (e.g. "2h ago", "3d ago").
+ * Handles SQLite "YYYY-MM-DD HH:MM:SS" format and ISO strings with or without Z.
  */
 export function timeAgo(dateStr: string | null | undefined): string | null {
   if (!dateStr) return null;
-  const then = new Date(dateStr).getTime();
+  // Normalise: replace space separator, add UTC suffix when no timezone present
+  let s = dateStr.trim().replace(" ", "T");
+  if (!s.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(s)) s += "Z";
+  const then = new Date(s).getTime();
   if (isNaN(then)) return null;
   const diffMs = Date.now() - then;
+  if (diffMs < 0) return "just now";
   const diffMin = Math.floor(diffMs / 60_000);
   if (diffMin < 1) return "just now";
   if (diffMin < 60) return `${diffMin}m ago`;
