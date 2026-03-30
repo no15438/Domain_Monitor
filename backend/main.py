@@ -5,7 +5,7 @@ import threading
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -66,6 +66,7 @@ from database import (
     task_start,
     task_finish,
     task_is_running,
+    task_get,
     task_cleanup_stale,
 )
 from vector_store import delete_document
@@ -110,6 +111,23 @@ def _bg_is_running(key: str) -> bool:
     phantom 'running' tasks after a server restart."""
     with _bg_lock:
         return key in _bg_generating
+
+
+def _task_status_payload(key: str) -> dict:
+    running = _bg_is_running(key)
+    record = task_get(key)
+    payload = {"running": running}
+    if record:
+        payload["status"] = record.get("status")
+        payload["error"] = record.get("error") or None
+        payload["result_summary"] = record.get("result_summary") or None
+        payload["finished_at"] = record.get("finished_at") or None
+    else:
+        payload["status"] = "running" if running else "idle"
+        payload["error"] = None
+        payload["result_summary"] = None
+        payload["finished_at"] = None
+    return payload
 
 
 async def _run_global_overview_background(topic_id: int):
@@ -208,7 +226,7 @@ class TopicReq(BaseModel):
 async def api_create_topic(req: TopicReq):
     tid = await asyncio.to_thread(create_topic, req.name, req.color)
     if tid is None:
-        return {"status": "error", "message": "Topic already exists"}
+        raise HTTPException(status_code=409, detail="Topic already exists")
     return {"status": "ok", "id": tid}
 
 
@@ -299,12 +317,12 @@ async def api_generate_research_plan(topic_id: int, req: GenerateResearchPlanReq
 
     match = _re.search(r"\{[\s\S]*\}", result)
     if not match:
-        return {"status": "error", "message": "Failed to parse LLM response"}
+        raise HTTPException(status_code=502, detail="Failed to parse LLM response")
 
     try:
         plan = json.loads(match.group())
     except json.JSONDecodeError:
-        return {"status": "error", "message": "Invalid JSON from LLM"}
+        raise HTTPException(status_code=502, detail="Invalid JSON from LLM")
 
     brief = plan.get("research_brief", req.prompt)
     kw_list = plan.get("keywords", [])
@@ -519,7 +537,6 @@ async def api_update_claim_status(claim_id: str, body: dict):
     status = body.get("status", "")
     allowed = {"active", "rejected", "superseded", "stale", "archived"}
     if status not in allowed:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=f"Invalid status '{status}'. Allowed: {sorted(allowed)}")
     updated = await asyncio.to_thread(update_claim_status, claim_id, status)
     return {"updated": updated}
@@ -620,7 +637,8 @@ async def fetch_now(topic_id: Optional[int] = None):
 
 @app.get("/api/fetch-now/status")
 async def fetch_now_status(topic_id: Optional[int] = None):
-    return {"running": _bg_is_running(f"fetch-{topic_id}")}
+    payload = _task_status_payload(f"fetch-{topic_id}")
+    return payload
 
 
 # ── Trending ─────────────────────────────────────────
@@ -781,7 +799,14 @@ async def api_generate_topic_summary(topic_id: int, hours: int = 24):
 @app.get("/api/topics/{topic_id}/ai-summary/status")
 async def api_live_summary_status(topic_id: int):
     """Whether a live AI summary job is currently running for this topic."""
-    return {"generating": _bg_is_running(f"live-{topic_id}")}
+    payload = _task_status_payload(f"live-{topic_id}")
+    return {
+        "generating": payload["running"],
+        "status": payload["status"],
+        "error": payload["error"],
+        "result_summary": payload["result_summary"],
+        "finished_at": payload["finished_at"],
+    }
 
 
 @app.get("/api/topics/{topic_id}/global-overview")
@@ -805,7 +830,14 @@ async def api_generate_global_overview(topic_id: int):
 @app.get("/api/topics/{topic_id}/global-overview/status")
 async def api_global_overview_status(topic_id: int):
     """Whether a global overview job is currently running for this topic."""
-    return {"generating": _bg_is_running(f"global-{topic_id}")}
+    payload = _task_status_payload(f"global-{topic_id}")
+    return {
+        "generating": payload["running"],
+        "status": payload["status"],
+        "error": payload["error"],
+        "result_summary": payload["result_summary"],
+        "finished_at": payload["finished_at"],
+    }
 
 
 @app.get("/api/topics/{topic_id}/synthesis/global-overview")
@@ -825,7 +857,14 @@ async def api_synthesis_generate_global_overview(topic_id: int):
 
 @app.get("/api/topics/{topic_id}/synthesis/global-overview/status")
 async def api_synthesis_global_overview_status(topic_id: int):
-    return {"generating": _bg_is_running(f"global-{topic_id}")}
+    payload = _task_status_payload(f"global-{topic_id}")
+    return {
+        "generating": payload["running"],
+        "status": payload["status"],
+        "error": payload["error"],
+        "result_summary": payload["result_summary"],
+        "finished_at": payload["finished_at"],
+    }
 
 
 @app.get("/api/topics/{topic_id}/synthesis/evolution-report")
@@ -845,7 +884,14 @@ async def api_generate_evolution_report(topic_id: int):
 
 @app.get("/api/topics/{topic_id}/synthesis/evolution-report/status")
 async def api_evolution_report_status(topic_id: int):
-    return {"generating": _bg_is_running(f"evolution-{topic_id}")}
+    payload = _task_status_payload(f"evolution-{topic_id}")
+    return {
+        "generating": payload["running"],
+        "status": payload["status"],
+        "error": payload["error"],
+        "result_summary": payload["result_summary"],
+        "finished_at": payload["finished_at"],
+    }
 
 # ── Chatbot (streaming) ──────────────────────────────
 

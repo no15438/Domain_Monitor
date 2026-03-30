@@ -79,6 +79,11 @@ def _coerce_dt(raw: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _analysis_time_text(row: dict) -> str:
+    """Human-readable analysis timeline timestamp: published_at first."""
+    return str(row.get("published_at") or row.get("created_at") or "")
+
+
 def _collect_stats_metadata(topic_id: int, hours: int = 24) -> dict:
     """Gather all stats metadata into a serializable dict for snapshot storage."""
     summary = get_insight_summary(topic_id, hours)
@@ -160,10 +165,12 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
         if events:
             parts.append("\n[Active events]")
             for i, event in enumerate(events[:15], 1):
+                analysis_ts = _analysis_time_text(event)
                 parts.append(
                     f"  [Event-{i}] {event['title']} "
                     f"(status: {event.get('status', '?')}, "
                     f"lifecycle: {event.get('event_status', '?')}, "
+                    f"analysis_time: {analysis_ts}, "
                     f"first_seen: {event.get('first_seen_at', '')}, "
                     f"last_seen: {event.get('last_seen_at', '')}, "
                     f"created_at: {event.get('created_at', '')}, "
@@ -484,7 +491,8 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
         ctx_parts.append("=== Historical Snapshots (Recent to Old) ===")
         for s in snapshots:
             ctx_parts.append(
-                f"Date: {s['created_at']} · "
+                f"TimelineDate: {s.get('window_end') or s.get('created_at', '')} · "
+                f"snapshot_created_at: {s.get('created_at', '')} · "
                 f"window_start: {s.get('window_start', '')} · "
                 f"window_end: {s.get('window_end', '')} · "
                 f"status: {s.get('snapshot_status', '')}\n"
@@ -503,10 +511,12 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
     if events:
         ctx_parts.append("=== Active Events ===")
         for i, event in enumerate(events[:15], 1):
+            analysis_ts = _analysis_time_text(event)
             ctx_parts.append(
                 f"[Event-{i}] {event.get('title', '')}\n"
                 f"Status: {event.get('status', '?')} · "
                 f"Lifecycle: {event.get('event_status', '?')} · "
+                f"analysis_time: {analysis_ts} · "
                 f"first_seen: {event.get('first_seen_at', '')} · "
                 f"last_seen: {event.get('last_seen_at', '')} · "
                 f"created_at: {event.get('created_at', '')}\n"
@@ -628,7 +638,8 @@ def generate_evolution_report_sync(topic_id: int) -> str:
     if snapshots:
         ctx_parts.append("=== Recent Snapshots ===")
         for snap in snapshots:
-            ctx_parts.append(f"{snap['created_at']}\n{snap['summary_text']}")
+            timeline_ts = snap.get("window_end") or snap.get("created_at")
+            ctx_parts.append(f"{timeline_ts}\n{snap['summary_text']}")
     if deltas:
         ctx_parts.append("=== Snapshot Deltas ===")
         for delta in deltas:

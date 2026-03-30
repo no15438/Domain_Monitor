@@ -1641,6 +1641,21 @@ def get_recent_article_stubs(topic_id=None, hours=48):
 # ── Insights queries ─────────────────────────────────
 
 
+def _analysis_ts_expr(alias: str = "") -> str:
+    """SQL expression for analysis timeline timestamp.
+
+    Prefer published_at when it parses as a valid datetime; otherwise fallback
+    to created_at. Alias should include trailing dot when needed (e.g. 'a.').
+    """
+    prefix = alias or ""
+    return (
+        "COALESCE("
+        f"datetime(NULLIF({prefix}published_at, '')),"
+        f"datetime({prefix}created_at)"
+        ")"
+    )
+
+
 def get_insight_summary(topic_id=None, hours=24):
     """Aggregate stats: top events, counts, source distribution."""
     conn = _conn()
@@ -1653,7 +1668,8 @@ def get_insight_summary(topic_id=None, hours=24):
         base_where += " AND articles.topic_id = ?"
         params.append(topic_id)
 
-    base_where += " AND articles.created_at >= datetime('now', ?)"
+    analysis_ts = _analysis_ts_expr("articles.")
+    base_where += f" AND {analysis_ts} >= datetime('now', ?)"
     params_with_time = params + [hour_arg]
 
     total = conn.execute(
@@ -1683,7 +1699,8 @@ def get_insight_summary(topic_id=None, hours=24):
     if topic_id is not None:
         join_where += " AND a.topic_id = ?"
         join_params.append(topic_id)
-    join_where += " AND a.created_at >= datetime('now', ?) AND a.is_canonical = 1"
+    join_analysis_ts = _analysis_ts_expr("a.")
+    join_where += f" AND {join_analysis_ts} >= datetime('now', ?) AND a.is_canonical = 1"
     join_params.append(hour_arg)
 
     top_events = conn.execute(
@@ -2187,26 +2204,27 @@ def get_topic_insights(topic_id=None, window_hours=24):
     current_params = params + [f"-{window_hours} hours"]
     prev_params = params + [f"-{window_hours * 2} hours", f"-{window_hours} hours"]
 
+    analysis_ts = _analysis_ts_expr()
     current_count = conn.execute(
-        f"SELECT COUNT(*) FROM articles {base_where} AND created_at >= datetime('now', ?)",
+        f"SELECT COUNT(*) FROM articles {base_where} AND {analysis_ts} >= datetime('now', ?)",
         current_params,
     ).fetchone()[0]
 
     previous_count = conn.execute(
-        f"SELECT COUNT(*) FROM articles {base_where} AND created_at >= datetime('now', ?) AND created_at < datetime('now', ?)",
+        f"SELECT COUNT(*) FROM articles {base_where} AND {analysis_ts} >= datetime('now', ?) AND {analysis_ts} < datetime('now', ?)",
         prev_params,
     ).fetchone()[0]
 
     trend_delta = current_count - previous_count
 
     sentiment_rows = conn.execute(
-        f"SELECT sentiment, COUNT(*) as cnt FROM articles {base_where} AND created_at >= datetime('now', ?) GROUP BY sentiment",
+        f"SELECT sentiment, COUNT(*) as cnt FROM articles {base_where} AND {analysis_ts} >= datetime('now', ?) GROUP BY sentiment",
         current_params,
     ).fetchall()
     sentiment_dist = {r["sentiment"]: r["cnt"] for r in sentiment_rows}
 
     tag_rows = conn.execute(
-        f"SELECT tags FROM articles {base_where} AND created_at >= datetime('now', ?)",
+        f"SELECT tags FROM articles {base_where} AND {analysis_ts} >= datetime('now', ?)",
         current_params,
     ).fetchall()
 
@@ -2238,9 +2256,10 @@ def get_trending_data(topic_id: int, days: int = 7):
     import json as _json
     conn = _conn()
 
+    analysis_ts = _analysis_ts_expr()
     # Daily article count + sentiment breakdown
     daily_rows = conn.execute(
-        """SELECT date(created_at) as day,
+        f"""SELECT date({analysis_ts}) as day,
                   COUNT(*) as total,
                   SUM(CASE WHEN sentiment='positive' THEN 1 ELSE 0 END) as pos,
                   SUM(CASE WHEN sentiment='neutral' THEN 1 ELSE 0 END) as neu,
@@ -2248,8 +2267,8 @@ def get_trending_data(topic_id: int, days: int = 7):
                   AVG(importance) as avg_importance,
                   AVG(topic_relevance) as avg_relevance
            FROM articles
-           WHERE topic_id = ? AND COALESCE(status, 'active') = 'active' AND created_at >= datetime('now', ?)
-           GROUP BY date(created_at)
+           WHERE topic_id = ? AND COALESCE(status, 'active') = 'active' AND {analysis_ts} >= datetime('now', ?)
+           GROUP BY date({analysis_ts})
            ORDER BY day""",
         (topic_id, f"-{days} days"),
     ).fetchall()
@@ -2269,7 +2288,7 @@ def get_trending_data(topic_id: int, days: int = 7):
 
     # Top entities across the window
     entity_rows = conn.execute(
-        "SELECT key_entities FROM articles WHERE topic_id = ? AND COALESCE(status, 'active') = 'active' AND created_at >= datetime('now', ?)",
+        f"SELECT key_entities FROM articles WHERE topic_id = ? AND COALESCE(status, 'active') = 'active' AND {analysis_ts} >= datetime('now', ?)",
         (topic_id, f"-{days} days"),
     ).fetchall()
 
@@ -2286,7 +2305,7 @@ def get_trending_data(topic_id: int, days: int = 7):
 
     # Average topic relevance
     rel_row = conn.execute(
-        "SELECT AVG(topic_relevance) as avg_rel FROM articles WHERE topic_id = ? AND COALESCE(status, 'active') = 'active' AND created_at >= datetime('now', ?)",
+        f"SELECT AVG(topic_relevance) as avg_rel FROM articles WHERE topic_id = ? AND COALESCE(status, 'active') = 'active' AND {analysis_ts} >= datetime('now', ?)",
         (topic_id, f"-{days} days"),
     ).fetchone()
     avg_topic_relevance = round(rel_row["avg_rel"] or 0, 2)
