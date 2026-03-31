@@ -84,7 +84,7 @@ def llm_chat(
                 filtered.append(m)
         resp = client.messages.create(
             model=_model(),
-            max_tokens=2048,
+            max_tokens=4096,
             system=system_msg,
             messages=filtered,
             temperature=temperature,
@@ -149,7 +149,7 @@ def llm_chat_stream(messages: list[dict], temperature: float = 0.5):
                 filtered.append(m)
         with client.messages.stream(
             model=_model(),
-            max_tokens=2048,
+            max_tokens=4096,
             system=system_msg,
             messages=filtered,
             temperature=temperature,

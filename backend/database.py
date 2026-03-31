@@ -1025,6 +1025,25 @@ def get_active_claims(topic_id: int, limit: int = 100):
     return [_serialize_claim_row(row) for row in rows]
 
 
+def get_claims_by_ids(claim_ids: list[str]) -> list[dict]:
+    """Return claim records for a given list of claim UUIDs (preserving order)."""
+    if not claim_ids:
+        return []
+    conn = _conn()
+    placeholders = ",".join("?" * len(claim_ids))
+    rows = conn.execute(
+        f"SELECT * FROM claims WHERE id IN ({placeholders})",
+        claim_ids,
+    ).fetchall()
+    conn.close()
+    id_order = {cid: i for i, cid in enumerate(claim_ids)}
+    result = sorted(
+        [_serialize_claim_row(r) for r in rows],
+        key=lambda r: id_order.get(r["id"], 9999),
+    )
+    return result
+
+
 def get_claims_for_event(event_id: str, limit: int = 20) -> list[dict]:
     """Return claims associated with an event via evidence_sets.
 
@@ -1326,25 +1345,28 @@ def list_artifact_sources(artifact_id: str):
 # ── Articles ──────────────────────────────────────────
 
 
-def delete_article(article_id: str):
+def delete_article(article_id: str) -> bool:
     conn = _conn()
-    conn.execute("DELETE FROM articles WHERE id = ?", (article_id,))
+    cur = conn.execute("DELETE FROM articles WHERE id = ?", (article_id,))
     conn.commit()
     conn.close()
+    return cur.rowcount > 0
 
 
-def archive_article(article_id: str):
+def archive_article(article_id: str) -> bool:
     conn = _conn()
-    conn.execute("UPDATE articles SET status = 'archived' WHERE id = ?", (article_id,))
+    cur = conn.execute("UPDATE articles SET status = 'archived' WHERE id = ?", (article_id,))
     conn.commit()
     conn.close()
+    return cur.rowcount > 0
 
 
-def restore_article(article_id: str):
+def restore_article(article_id: str) -> bool:
     conn = _conn()
-    conn.execute("UPDATE articles SET status = 'active' WHERE id = ?", (article_id,))
+    cur = conn.execute("UPDATE articles SET status = 'active' WHERE id = ?", (article_id,))
     conn.commit()
     conn.close()
+    return cur.rowcount > 0
 
 
 def get_articles(limit=50, offset=0, topic_id=None, sort="relevance", status="active", event_id=None):
@@ -1485,12 +1507,13 @@ def remove_keyword(keyword_id: int):
     conn.close()
 
 
-def toggle_article_kept(article_id: str, is_kept: int):
+def toggle_article_kept(article_id: str, is_kept: int) -> bool:
     """Toggle the is_kept status of an article."""
     conn = _conn()
-    conn.execute("UPDATE articles SET is_kept = ? WHERE id = ?", (is_kept, article_id))
+    cur = conn.execute("UPDATE articles SET is_kept = ? WHERE id = ?", (is_kept, article_id))
     conn.commit()
     conn.close()
+    return cur.rowcount > 0
 
 
 def update_article_metadata(
@@ -1969,13 +1992,14 @@ def restore_event_cluster(event_id: str):
     conn.close()
 
 
-def delete_event_cluster(event_id: str):
+def delete_event_cluster(event_id: str) -> bool:
     """Delete all articles in this cluster and the events_v2 entry."""
     conn = _conn()
     conn.execute("DELETE FROM articles WHERE event_id = ?", (event_id,))
-    conn.execute("DELETE FROM events_v2 WHERE id = ?", (event_id,))
+    cur = conn.execute("DELETE FROM events_v2 WHERE id = ?", (event_id,))
     conn.commit()
     conn.close()
+    return cur.rowcount > 0
 
 
 def deduplicate_events(topic_id: int, similarity_threshold: float = 0.40) -> int:

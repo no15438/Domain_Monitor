@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import socket
 import feedparser
 from html import unescape
 import re
@@ -17,11 +18,15 @@ def _strip_html(text: str) -> str:
 
 
 def collect_feed(feed_url: str, max_items: int = 20) -> list[dict]:
+    old_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(15)
     try:
         feed = feedparser.parse(feed_url)
     except Exception as e:
         log.warning("parse error for '%s': %s", feed_url, e)
         return []
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
     results: list[dict] = []
     for entry in feed.entries[:max_items]:
