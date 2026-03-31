@@ -13,6 +13,7 @@ from database import (
     add_claim_evolution,
     create_topic,
     get_active_claims,
+    get_articles,
     get_claims_v2,
     get_events_v2,
     get_snapshot_deltas,
@@ -109,6 +110,46 @@ def _seed_raw_news(topic_id: int, fixture: dict):
         row["metadata_json"] = json.dumps(row.pop("metadata", {}), ensure_ascii=False)
         rows.append(row)
     insert_raw_news(rows)
+
+
+def _seed_articles(topic_id: int, fixture: dict):
+    """Seed the articles table from a fixture's 'articles' list.
+
+    Uses a minimal INSERT so that get_insight_summary / _build_evolution_citation_catalog
+    can find article references without requiring all optional columns.
+    Skips silently if the fixture has no 'articles' key.
+    """
+    articles = fixture.get("articles")
+    if not articles:
+        return
+    conn = _conn()
+    inserted = 0
+    for art in articles:
+        try:
+            conn.execute(
+                """INSERT OR IGNORE INTO articles
+                   (id, title, summary, source, url, topic_id, importance, status,
+                    created_at, published_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    art["id"],
+                    art["title"],
+                    art.get("summary", ""),
+                    art.get("source", "Fixture"),
+                    art["url"],
+                    topic_id,
+                    art.get("importance", 7),
+                    art.get("status", "active"),
+                    art.get("created_at"),
+                    art.get("published_at"),
+                ),
+            )
+            inserted += 1
+        except Exception as exc:
+            print(f"  [seed_articles] skipped {art.get('id', '?')}: {exc}")
+    conn.commit()
+    conn.close()
+    print(f"  [seed_articles] {inserted} article(s) seeded for topic {topic_id}")
 
 
 def _seed_events(topic_id: int, fixture: dict):
@@ -316,6 +357,7 @@ def main():
     _purge_topic_lineage(topic_id)
 
     _seed_raw_news(topic_id, fixture)
+    _seed_articles(topic_id, fixture)
     _seed_events(topic_id, fixture)
     _seed_claims(topic_id, fixture)
     _seed_evidence(topic_id, fixture)
@@ -327,6 +369,7 @@ def main():
         "topic_id": topic_id,
         "topic_name": topic_cfg["name"],
         "raw_news": len(fixture["raw_news"]),
+        "articles": len(get_articles(limit=100, topic_id=topic_id, status=None)),
         "events": len(get_events_v2(topic_id, limit=100)),
         "evidence_sets": len(list_evidence_sets(topic_id, limit=100)),
         "claims": len(get_claims_v2(topic_id, limit=100)),

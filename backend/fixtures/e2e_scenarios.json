@@ -1,0 +1,504 @@
+{
+  "_comment": "E2E test scenarios covering the full system including the adequacy gate. Each scenario is a self-contained topic. Seed with: python scripts/seed_e2e_scenarios.py (or use the pytest suite in tests/test_pipeline_e2e.py for automated coverage).",
+  "scenarios": [
+    {
+      "name": "topic_a_rich",
+      "_comment": "Scenario A: 3 snapshots with clear event/claim diff + claim_evolution. Adequacy gate passes. All three generators (daily summary, global overview, evolution report) should work.",
+      "topic": {
+        "name": "E2E-A: AI Chip Supply Dynamics",
+        "color": "#0369a1",
+        "research_brief": "Track AI chip supply constraints, export policy shifts, and how enterprises adapt procurement strategies.",
+        "research_config": {
+          "angles": [
+            "GPU supply tightness",
+            "Export control escalation",
+            "Regional cloud substitution",
+            "Enterprise procurement friction"
+          ],
+          "entities": ["NVIDIA", "AMD", "US Commerce Department", "ByteBridge Cloud"],
+          "geographic_scope": ["United States", "Southeast Asia", "Middle East"],
+          "sector_scope": ["AI Infrastructure", "Semiconductors", "Cloud Computing"]
+        },
+        "pipeline_config": {
+          "auto_fetch_disabled": true,
+          "e2e_fixture": true
+        }
+      },
+      "articles": [
+        {
+          "id": "e2e-a-art-001",
+          "title": "US extends AI chip export delay, buyers get 90-day window",
+          "summary": "A policy briefing confirmed an additional 90-day delay in stricter AI accelerator export controls, giving buyers a temporary planning window.",
+          "source": "E2E Wire",
+          "url": "https://e2e.test/a/export-delay",
+          "importance": 9,
+          "status": "active",
+          "published_at": "2026-03-03T09:00:00Z",
+          "created_at": "2026-03-03T09:15:00Z"
+        },
+        {
+          "id": "e2e-a-art-002",
+          "title": "Hyperscalers lock in 2026 GPU capacity with prepayment contracts",
+          "summary": "Multiple hyperscalers signed prepayment agreements for 2026 GPU clusters; enterprise delivery windows stretched past 20 weeks.",
+          "source": "E2E Wire",
+          "url": "https://e2e.test/a/hyperscaler-prepay",
+          "importance": 9,
+          "status": "active",
+          "published_at": "2026-03-10T10:00:00Z",
+          "created_at": "2026-03-10T10:15:00Z"
+        },
+        {
+          "id": "e2e-a-art-003",
+          "title": "Regional sovereign cloud offerings emerge as GPU access workaround",
+          "summary": "Cloud operators in Southeast Asia and the Middle East launched sovereign GPU packages, redirecting demand away from direct chip procurement.",
+          "source": "E2E Wire",
+          "url": "https://e2e.test/a/regional-cloud",
+          "importance": 8,
+          "status": "active",
+          "published_at": "2026-03-17T08:30:00Z",
+          "created_at": "2026-03-17T08:45:00Z"
+        },
+        {
+          "id": "e2e-a-art-004",
+          "title": "Channel partners report 18-24 week GPU lead times persist",
+          "summary": "A distributor survey found that top-tier GPU lead times remain at 18 to 24 weeks for enterprise buyers; secondary prices softened slightly.",
+          "source": "E2E Wire",
+          "url": "https://e2e.test/a/channel-waits",
+          "importance": 7,
+          "status": "active",
+          "published_at": "2026-03-18T14:00:00Z",
+          "created_at": "2026-03-18T14:20:00Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "e2e-a-evt-001",
+          "event_key": "export-control-delay",
+          "title": "Export control escalation delayed, creating a temporary planning window",
+          "summary": "Policy guidance points to a 90-day delay in tougher controls, which weakens the thesis of an immediate demand collapse.",
+          "status": "resolved",
+          "canonical_article_id": "e2e-a-art-001",
+          "first_seen_at": "2026-03-03T09:00:00Z",
+          "last_seen_at": "2026-03-08T12:00:00Z",
+          "stability_score": 0.58,
+          "fact_confidence": 0.67,
+          "metadata": {"phase": "policy"},
+          "sources": [
+            {
+              "event_id": "e2e-a-evt-001",
+              "raw_news_id": null,
+              "article_id": "e2e-a-art-001",
+              "source_rank": 1,
+              "source_role": "primary",
+              "is_canonical": 1,
+              "metadata": {}
+            }
+          ]
+        },
+        {
+          "id": "e2e-a-evt-002",
+          "event_key": "hyperscaler-prepay-2026",
+          "title": "Hyperscalers prepay for 2026 GPU capacity as enterprise queues lengthen",
+          "summary": "Prepayment contracts and persistent long queues confirm that frontier GPU supply remains constrained through H1 2026.",
+          "status": "active",
+          "canonical_article_id": "e2e-a-art-002",
+          "first_seen_at": "2026-03-10T10:00:00Z",
+          "last_seen_at": "2026-03-18T14:00:00Z",
+          "stability_score": 0.84,
+          "fact_confidence": 0.83,
+          "metadata": {"phase": "capacity"},
+          "sources": [
+            {
+              "event_id": "e2e-a-evt-002",
+              "raw_news_id": null,
+              "article_id": "e2e-a-art-002",
+              "source_rank": 1,
+              "source_role": "primary",
+              "is_canonical": 1,
+              "metadata": {}
+            }
+          ]
+        },
+        {
+          "id": "e2e-a-evt-003",
+          "event_key": "regional-sovereign-cloud",
+          "title": "Regional sovereign cloud offerings absorb demand previously directed at direct chip procurement",
+          "summary": "New regional GPU clouds give buyers an alternative path to capacity, shifting demand away from direct chip purchases.",
+          "status": "active",
+          "canonical_article_id": "e2e-a-art-003",
+          "first_seen_at": "2026-03-17T08:30:00Z",
+          "last_seen_at": "2026-03-18T14:00:00Z",
+          "stability_score": 0.79,
+          "fact_confidence": 0.81,
+          "metadata": {"phase": "regional-cloud"},
+          "sources": [
+            {
+              "event_id": "e2e-a-evt-003",
+              "raw_news_id": null,
+              "article_id": "e2e-a-art-003",
+              "source_rank": 1,
+              "source_role": "primary",
+              "is_canonical": 1,
+              "metadata": {}
+            }
+          ]
+        }
+      ],
+      "claims": [
+        {
+          "id": "e2e-a-clm-001",
+          "statement": "Enterprise access to frontier GPUs will remain supply constrained through H1 2026.",
+          "claim_type": "forecast",
+          "summary": "Contract prepayments and persistent lead times suggest that frontier GPU access stays tight for enterprise buyers.",
+          "status": "active",
+          "decay_policy": "slow",
+          "staleness_status": "fresh",
+          "metadata": {"theme": "capacity"}
+        },
+        {
+          "id": "e2e-a-clm-002",
+          "statement": "New export controls will immediately cut off China-linked demand for advanced accelerators.",
+          "claim_type": "forecast",
+          "summary": "This early forecast expected an immediate shock to China-linked demand, but evidence later weakened it.",
+          "status": "active",
+          "decay_policy": "medium",
+          "staleness_status": "aging",
+          "metadata": {"theme": "policy"}
+        },
+        {
+          "id": "e2e-a-clm-003",
+          "statement": "Demand is increasingly rerouted toward regional cloud access rather than direct chip shipments.",
+          "claim_type": "structural",
+          "summary": "Regional cloud offerings absorb demand that might otherwise have been expressed as direct chip procurement.",
+          "status": "active",
+          "supersedes_claim_id": "e2e-a-clm-002",
+          "decay_policy": "slow",
+          "staleness_status": "fresh",
+          "metadata": {"theme": "regional-cloud"}
+        }
+      ],
+      "claim_evolution": [
+        {
+          "claim_id": "e2e-a-clm-001",
+          "previous_claim_id": null,
+          "relation_type": "strengthened",
+          "reason": "Week two and three evidence both reinforced the ongoing supply constraint thesis.",
+          "metadata": {"window": "week2_to_week3"}
+        },
+        {
+          "claim_id": "e2e-a-clm-003",
+          "previous_claim_id": "e2e-a-clm-002",
+          "relation_type": "supersedes",
+          "reason": "Regional cloud substitution became a better explanation than immediate demand collapse.",
+          "metadata": {"window": "week2_to_week3"}
+        }
+      ],
+      "evidence_sets": [
+        {
+          "id": "e2e-a-ev-001",
+          "event_id": "e2e-a-evt-002",
+          "claim_id": "e2e-a-clm-001",
+          "title": "2026 GPU prepayment contracts",
+          "summary": "Hyperscaler prepayment agreements indicate that leading-edge GPU capacity has already been partially spoken for.",
+          "evidence_type": "contract_signal",
+          "stance": "supporting",
+          "confidence": 0.86,
+          "freshness_half_life": 14,
+          "review_state": "machine_only",
+          "supporting_event_ids": ["e2e-a-evt-002"],
+          "contradicting_event_ids": [],
+          "metadata": {"url": "https://e2e.test/a/hyperscaler-prepay"}
+        },
+        {
+          "id": "e2e-a-ev-002",
+          "event_id": "e2e-a-evt-001",
+          "claim_id": "e2e-a-clm-002",
+          "title": "Policy briefing on export control timing",
+          "summary": "The briefing introduced uncertainty around immediate policy implementation and weakened the immediate cutoff thesis.",
+          "evidence_type": "policy_signal",
+          "stance": "mixed",
+          "confidence": 0.61,
+          "freshness_half_life": 10,
+          "review_state": "machine_only",
+          "supporting_event_ids": [],
+          "contradicting_event_ids": ["e2e-a-evt-001"],
+          "metadata": {"url": "https://e2e.test/a/export-delay"}
+        },
+        {
+          "id": "e2e-a-ev-003",
+          "event_id": "e2e-a-evt-003",
+          "claim_id": "e2e-a-clm-003",
+          "title": "Regional sovereign GPU cloud launches",
+          "summary": "Regional cloud launches show that buyers can now acquire managed access instead of direct chip shipments.",
+          "evidence_type": "market_signal",
+          "stance": "supporting",
+          "confidence": 0.84,
+          "freshness_half_life": 14,
+          "review_state": "machine_only",
+          "supporting_event_ids": ["e2e-a-evt-003"],
+          "contradicting_event_ids": [],
+          "metadata": {"url": "https://e2e.test/a/regional-cloud"}
+        }
+      ],
+      "snapshots": [
+        {
+          "key": "week_1",
+          "window_type": "daily",
+          "window_start": "2026-03-01T00:00:00Z",
+          "window_end": "2026-03-07T23:59:59Z",
+          "snapshot_status": "final",
+          "summary_text": "Week 1: the dominant story was policy uncertainty. The market expected tighter export controls, but a briefing suggested a delay. That softened the idea of an immediate demand cliff.",
+          "stats_metadata": {
+            "generated_utc": "2026-03-07T23:59:59Z",
+            "total_articles": 1,
+            "important_count": 1
+          },
+          "event_ids": ["e2e-a-evt-001"],
+          "claim_ids": ["e2e-a-clm-002"]
+        },
+        {
+          "key": "week_2",
+          "window_type": "daily",
+          "window_start": "2026-03-08T00:00:00Z",
+          "window_end": "2026-03-14T23:59:59Z",
+          "snapshot_status": "final",
+          "summary_text": "Week 2: the narrative shifted from policy speculation to hard capacity signals. Hyperscaler prepayments made GPU scarcity the central theme, strengthening the supply-constraint claim.",
+          "stats_metadata": {
+            "generated_utc": "2026-03-14T23:59:59Z",
+            "total_articles": 2,
+            "important_count": 2
+          },
+          "event_ids": ["e2e-a-evt-001", "e2e-a-evt-002"],
+          "claim_ids": ["e2e-a-clm-001", "e2e-a-clm-002"]
+        },
+        {
+          "key": "week_3",
+          "window_type": "daily",
+          "window_start": "2026-03-15T00:00:00Z",
+          "window_end": "2026-03-21T23:59:59Z",
+          "snapshot_status": "final",
+          "summary_text": "Week 3: supply constraints remained, but the bigger structural change was routing. Regional sovereign clouds emerged as a practical workaround, so the story evolved from export shock to managed access substitution.",
+          "stats_metadata": {
+            "generated_utc": "2026-03-21T23:59:59Z",
+            "total_articles": 4,
+            "important_count": 3
+          },
+          "event_ids": ["e2e-a-evt-002", "e2e-a-evt-003"],
+          "claim_ids": ["e2e-a-clm-001", "e2e-a-clm-003"]
+        }
+      ],
+      "snapshot_deltas": [
+        {
+          "from_key": "week_1",
+          "to_key": "week_2",
+          "change_summary": "Center of gravity moved from policy timing to capacity scarcity. Event 002 was new; claim 001 strengthened; immediate-cutoff narrative lost relative importance.",
+          "new_event_ids": ["e2e-a-evt-002"],
+          "resolved_event_ids": [],
+          "strengthened_claim_ids": ["e2e-a-clm-001"],
+          "weakened_claim_ids": ["e2e-a-clm-002"],
+          "superseded_claim_ids": [],
+          "metadata": {"window_type": "daily"}
+        },
+        {
+          "from_key": "week_2",
+          "to_key": "week_3",
+          "change_summary": "Narrative expanded from scarcity alone to scarcity plus substitution. Event 003 emerged; claim 003 superseded claim 002; policy-shock framing gave way to regional-cloud workaround story.",
+          "new_event_ids": ["e2e-a-evt-003"],
+          "resolved_event_ids": ["e2e-a-evt-001"],
+          "strengthened_claim_ids": ["e2e-a-clm-001", "e2e-a-clm-003"],
+          "weakened_claim_ids": ["e2e-a-clm-002"],
+          "superseded_claim_ids": ["e2e-a-clm-002"],
+          "metadata": {"window_type": "daily"}
+        }
+      ],
+      "artifacts": [
+        {
+          "artifact_type": "global_overview",
+          "title": "E2E-A Global Overview",
+          "content": "## 1. Domain Definition & Scope\nThis topic tracks AI chip supply constraints and enterprise procurement adaptations.\n\n## 2. Historical Evolution\nPolicy uncertainty gave way to hard capacity signals; regional cloud intermediation emerged as the structural adaptation.\n\n## 3. Key Entities & Power Dynamics\nNVIDIA dominates GPU supply; hyperscalers are primary demand drivers; regional cloud operators provide alternative access paths.\n\n## 4. Persistent Themes\nSupply tightness and cloud substitution appear repeatedly across monitoring periods.\n\n## 5. Timeliness Assessment\nCapacity claims are fresh; policy claims need ongoing verification.",
+          "status": "final",
+          "metadata": {"source": "e2e_fixture"},
+          "source_snapshot_keys": ["week_1", "week_2", "week_3"],
+          "source_delta_indexes": [0, 1],
+          "source_claim_ids": ["e2e-a-clm-001", "e2e-a-clm-003"]
+        },
+        {
+          "artifact_type": "evolution_report",
+          "title": "E2E-A Evolution Report",
+          "content": "## 1. Observed Changes\nThe monitoring period moved from policy-shock framing to a scarcity-plus-substitution model. Supply constraint claims strengthened while the immediate-cutoff forecast was superseded.\n\n## 2. Event-Level Shifts\nEvent 001 (export delay) resolved as the temporary planning window closed. Event 003 (regional cloud) emerged as a new structural factor.\n\n## 3. Claim Trajectories\nClaim 003 superseded claim 002, reflecting the shift from immediate policy shock to regional substitution.\n\n## 4. Strategic Implications\nThe market adapted through cloud intermediation rather than stopping outright, confirming a structural rather than temporary change.",
+          "status": "final",
+          "metadata": {"source": "e2e_fixture"},
+          "source_snapshot_keys": ["week_1", "week_2", "week_3"],
+          "source_delta_indexes": [0, 1],
+          "source_claim_ids": ["e2e-a-clm-001", "e2e-a-clm-002", "e2e-a-clm-003"]
+        }
+      ]
+    },
+    {
+      "name": "topic_b_no_diff",
+      "_comment": "Scenario B: 2 snapshots sharing IDENTICAL events and claims — no diff signals. has_diff_signals=False, provisonal tier. Adequacy gate must suppress output.",
+      "topic": {
+        "name": "E2E-B: Stable Domain No Change",
+        "color": "#7c3aed",
+        "research_brief": "Track a domain that remains unchanged across monitoring periods to validate gate suppression.",
+        "research_config": {
+          "angles": ["Steady-state monitoring"],
+          "entities": ["StableCorpA", "StableCorpB"],
+          "geographic_scope": ["Global"],
+          "sector_scope": ["Test"]
+        },
+        "pipeline_config": {
+          "auto_fetch_disabled": true,
+          "e2e_fixture": true
+        }
+      },
+      "articles": [
+        {
+          "id": "e2e-b-art-001",
+          "title": "StableCorpA reports unchanged quarterly results",
+          "summary": "StableCorpA's quarterly report showed no material change in revenue or market position.",
+          "source": "E2E Wire",
+          "url": "https://e2e.test/b/stable-q1",
+          "importance": 6,
+          "status": "active",
+          "published_at": "2026-03-05T09:00:00Z",
+          "created_at": "2026-03-05T09:10:00Z"
+        },
+        {
+          "id": "e2e-b-art-002",
+          "title": "StableCorpB maintains consistent market share",
+          "summary": "StableCorpB held its market position stable for the third consecutive month with no new product announcements.",
+          "source": "E2E Wire",
+          "url": "https://e2e.test/b/stable-market",
+          "importance": 5,
+          "status": "active",
+          "published_at": "2026-03-12T10:00:00Z",
+          "created_at": "2026-03-12T10:15:00Z"
+        }
+      ],
+      "events": [
+        {
+          "id": "e2e-b-evt-001",
+          "event_key": "stable-ongoing-event",
+          "title": "Steady-state market activity with no material change",
+          "summary": "The domain shows consistent patterns with no new events or disruptions reported.",
+          "status": "active",
+          "first_seen_at": "2026-03-01T00:00:00Z",
+          "last_seen_at": "2026-03-18T00:00:00Z",
+          "stability_score": 0.95,
+          "fact_confidence": 0.90,
+          "metadata": {"phase": "stable"},
+          "sources": []
+        }
+      ],
+      "claims": [
+        {
+          "id": "e2e-b-clm-001",
+          "statement": "The domain remains in a steady-state with no significant structural changes.",
+          "claim_type": "observation",
+          "summary": "All monitoring signals confirm stability with no emerging disruptions.",
+          "status": "active",
+          "decay_policy": "slow",
+          "staleness_status": "fresh",
+          "metadata": {"theme": "stability"}
+        }
+      ],
+      "claim_evolution": [],
+      "evidence_sets": [],
+      "snapshots": [
+        {
+          "key": "snapshot_1",
+          "window_type": "daily",
+          "window_start": "2026-03-01T00:00:00Z",
+          "window_end": "2026-03-10T23:59:59Z",
+          "snapshot_status": "final",
+          "summary_text": "Week 1: domain remains stable. StableCorpA and StableCorpB show no material change. The steady-state event continues with no new signals.",
+          "stats_metadata": {
+            "generated_utc": "2026-03-10T23:59:59Z",
+            "total_articles": 1
+          },
+          "event_ids": ["e2e-b-evt-001"],
+          "claim_ids": ["e2e-b-clm-001"]
+        },
+        {
+          "key": "snapshot_2",
+          "window_type": "daily",
+          "window_start": "2026-03-11T00:00:00Z",
+          "window_end": "2026-03-18T23:59:59Z",
+          "snapshot_status": "final",
+          "summary_text": "Week 2: domain continues in steady-state. No new events or claims emerged. Same signals persist from the prior week.",
+          "stats_metadata": {
+            "generated_utc": "2026-03-18T23:59:59Z",
+            "total_articles": 2
+          },
+          "event_ids": ["e2e-b-evt-001"],
+          "claim_ids": ["e2e-b-clm-001"]
+        }
+      ],
+      "snapshot_deltas": [
+        {
+          "from_key": "snapshot_1",
+          "to_key": "snapshot_2",
+          "change_summary": "No meaningful change detected. Same event and claim persisted with no new signals.",
+          "new_event_ids": [],
+          "resolved_event_ids": [],
+          "strengthened_claim_ids": [],
+          "weakened_claim_ids": [],
+          "superseded_claim_ids": [],
+          "metadata": {"window_type": "daily"}
+        }
+      ],
+      "artifacts": []
+    },
+    {
+      "name": "topic_c_articles_only",
+      "_comment": "Scenario C: articles exist but no temporal_snapshots. tier=provisional, no diff signals. Gate Rule 1 suppresses output.",
+      "topic": {
+        "name": "E2E-C: Early Stage Monitoring",
+        "color": "#d97706",
+        "research_brief": "A newly created topic with only initial articles — no snapshots yet. Tests provisional gate suppression.",
+        "research_config": {
+          "angles": ["Initial signal collection"],
+          "entities": ["NewStartupX"],
+          "geographic_scope": ["North America"],
+          "sector_scope": ["Emerging Tech"]
+        },
+        "pipeline_config": {
+          "auto_fetch_disabled": true,
+          "e2e_fixture": true
+        }
+      },
+      "articles": [
+        {
+          "id": "e2e-c-art-001",
+          "title": "NewStartupX raises Series B for AI hardware acceleration",
+          "summary": "NewStartupX announced a $120M Series B round to develop its proprietary AI hardware acceleration technology.",
+          "source": "E2E Wire",
+          "url": "https://e2e.test/c/startup-series-b",
+          "importance": 8,
+          "status": "active",
+          "published_at": "2026-03-15T10:00:00Z",
+          "created_at": "2026-03-15T10:30:00Z"
+        },
+        {
+          "id": "e2e-c-art-002",
+          "title": "Analysts preview emerging AI chip alternatives to NVIDIA",
+          "summary": "Multiple research notes discussed early-stage alternatives to NVIDIA's GPU dominance, noting the long development timeline.",
+          "source": "E2E Wire",
+          "url": "https://e2e.test/c/chip-alternatives",
+          "importance": 7,
+          "status": "active",
+          "published_at": "2026-03-16T09:00:00Z",
+          "created_at": "2026-03-16T09:20:00Z"
+        }
+      ],
+      "events": [],
+      "claims": [],
+      "claim_evolution": [],
+      "evidence_sets": [],
+      "snapshots": [],
+      "snapshot_deltas": [],
+      "artifacts": []
+    }
+  ]
+}
