@@ -30,6 +30,7 @@ import {
   type EventCluster,
   type EventClaimSummary,
   type SynthesisArtifact,
+  type AnalysisCitation,
 } from "@/lib/api";
 import {
   fetchEvents,
@@ -50,6 +51,34 @@ import { timeAgo } from "@/lib/utils";
 import { updateClaimStatus, deleteClaim } from "@/lib/api";
 import AnalysisRichText from "./AnalysisRichText";
 
+
+function friendlySuppressionMessage(reason: string): string {
+  if (reason.includes("provisional tier with no diff signals")) {
+    return "Not enough temporal data yet. Evolution narratives require at least two daily snapshots with observable changes (new/resolved events or updated claims). Fetch more articles and wait for the next snapshot cycle.";
+  }
+  if (reason.includes("provisional tier") || reason.includes("no snapshots")) {
+    return "No temporal snapshots exist for this topic yet. Run the summary pipeline first to create a baseline snapshot.";
+  }
+  if (reason.includes("insufficient structured facts")) {
+    return "The recent activity doesn't contain enough structured signal to generate a meaningful evolution narrative. Try again after more articles are fetched and processed.";
+  }
+  if (reason.includes("extractor failed") || reason.includes("rule-based fallback produced no facts")) {
+    return "Could not extract meaningful changes from the available snapshots. Try again after more content has been collected.";
+  }
+  return `Not enough data to generate an evolution narrative: ${reason}`;
+}
+
+function extractSnapshotCitations(statsMetadata: string | null | undefined): AnalysisCitation[] {
+  if (!statsMetadata) return [];
+  try {
+    const parsed: unknown = JSON.parse(statsMetadata);
+    if (typeof parsed !== "object" || parsed === null) return [];
+    const citations = (parsed as Record<string, unknown>).citations;
+    return Array.isArray(citations) ? (citations as AnalysisCitation[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 export default function MacroAnalysisPanel({
   activeTopicId,
@@ -96,6 +125,7 @@ export default function MacroAnalysisPanel({
   const [evolutionArtifact, setEvolutionArtifact] = useState<SynthesisArtifact | null>(null);
   const [evolutionGenerating, setEvolutionGenerating] = useState(false);
   const [evolutionLoading, setEvolutionLoading] = useState(false);
+  const [evolutionSuppressedReason, setEvolutionSuppressedReason] = useState<string | null>(null);
 
   // Build a Map<snapshotId, SnapshotDelta> for quick lookup in the timeline
   const deltaBySnapshotId = useMemo(() => {
@@ -147,6 +177,7 @@ export default function MacroAnalysisPanel({
       setEvolutionArtifact(null);
       setEvolutionGenerating(false);
       setEvolutionLoading(false);
+      setEvolutionSuppressedReason(null);
       return;
     }
     let cancelled = false;
@@ -159,6 +190,11 @@ export default function MacroAnalysisPanel({
         if (cancelled) return;
         setEvolutionArtifact(artifact);
         setEvolutionGenerating(status.generating);
+        if (!status.generating && !artifact && status.result_summary?.startsWith("suppressed:")) {
+          setEvolutionSuppressedReason(
+            status.result_summary.replace(/^suppressed:\s*/i, "").trim(),
+          );
+        }
         if (!status.generating) {
           useStore
             .getState()
@@ -193,6 +229,11 @@ export default function MacroAnalysisPanel({
           if (cancelled) return;
           setEvolutionGenerating(status.generating);
           if (artifact) setEvolutionArtifact(artifact);
+          if (!status.generating && !artifact && status.result_summary?.startsWith("suppressed:")) {
+            setEvolutionSuppressedReason(
+              status.result_summary.replace(/^suppressed:\s*/i, "").trim(),
+            );
+          }
           if (!status.generating) {
             useStore
               .getState()
@@ -226,6 +267,7 @@ export default function MacroAnalysisPanel({
 
   const handleGenerateEvolution = () => {
     if (activeTopicId == null || evolutionGenerating) return;
+    setEvolutionSuppressedReason(null);
     // Reset any stale persisted action state before starting
     useStore.getState().beginAction(`task:evolution-report:${activeTopicId}`);
     setEvolutionGenerating(true);
@@ -737,6 +779,18 @@ export default function MacroAnalysisPanel({
               content={evolutionArtifact.content}
               citations={evolutionArtifact.metadata?.citations}
             />
+          ) : evolutionSuppressedReason && !evolutionGenerating && !evolutionLoading ? (
+            <div className="rounded-md border border-border/40 bg-surface-hover/30 p-2.5 space-y-2">
+              <p className="text-[10px] text-muted leading-snug">
+                {friendlySuppressionMessage(evolutionSuppressedReason)}
+              </p>
+              <button
+                onClick={handleGenerateEvolution}
+                className="text-[10px] text-accent hover:underline"
+              >
+                Try again
+              </button>
+            </div>
           ) : !evolutionGenerating && !evolutionLoading ? (
             <button
               onClick={handleGenerateEvolution}
@@ -777,11 +831,14 @@ export default function MacroAnalysisPanel({
                     <span>{getSnapshotStatusLabel(snapshot.snapshot_status)}</span>
                   </div>
                   <div
-                    className={`mt-1 text-[11px] text-foreground whitespace-pre-wrap ${
-                      expandedSnapshotIds.includes(snapshot.id) ? "" : "line-clamp-5"
+                    className={`mt-1 ${
+                      expandedSnapshotIds.includes(snapshot.id) ? "" : "max-h-20 overflow-hidden"
                     }`}
                   >
-                    {snapshot.summary_text}
+                    <AnalysisRichText
+                      content={snapshot.summary_text}
+                      citations={extractSnapshotCitations(snapshot.stats_metadata)}
+                    />
                   </div>
                   <button
                     onClick={() => toggleSnapshot(snapshot.id)}

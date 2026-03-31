@@ -8,6 +8,7 @@ import ResearchBriefPanel from "@/components/ResearchBriefPanel";
 import EventFeed from "@/components/EventFeed";
 import AnalysisPanel from "@/components/AnalysisPanel";
 import ChatBot from "@/components/ChatBot";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import { useStore } from "@/stores/useStore";
 import { fetchTopics, fetchKeywords, type Topic } from "@/lib/api";
 
@@ -126,13 +127,19 @@ export default function TopicDetailPage() {
     <div className="flex flex-col h-full">
       <TopicHeader topicName={topic.name} topicColor={topic.color} />
       <main className="flex flex-1 overflow-hidden">
-        <ResearchBriefPanel
-          topic={topic}
-          collapsed={briefCollapsed}
-          onToggle={() => setBriefCollapsed(topicId, !briefCollapsed)}
-        />
-        <EventFeed />
-        {chatOpen ? <ChatBot /> : <AnalysisPanel />}
+        <ErrorBoundary>
+          <ResearchBriefPanel
+            topic={topic}
+            collapsed={briefCollapsed}
+            onToggle={() => setBriefCollapsed(topicId, !briefCollapsed)}
+          />
+        </ErrorBoundary>
+        <ErrorBoundary>
+          <EventFeed />
+        </ErrorBoundary>
+        <ErrorBoundary>
+          {chatOpen ? <ChatBot /> : <AnalysisPanel />}
+        </ErrorBoundary>
       </main>
     </div>
   );

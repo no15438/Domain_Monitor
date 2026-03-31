@@ -114,6 +114,23 @@ body {
 .ai-summary-content h2:first-child {
   margin-top: 0;
 }
+.ai-summary-content h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-top: 0.75em;
+  margin-bottom: 0.3em;
+}
+.ai-summary-content h3:first-child {
+  margin-top: 0;
+}
+.ai-summary-content h4 {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-top: 0.5em;
+  margin-bottom: 0.25em;
+}
 .ai-summary-content p {
   margin-bottom: 0.5em;
   color: var(--muted);

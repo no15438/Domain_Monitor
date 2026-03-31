@@ -1,91 +1,170 @@
 "use client";
 
 import { Fragment } from "react";
-import ReactMarkdown from "react-markdown";
-import type { Components } from "react-markdown";
 import type { AnalysisCitation } from "@/lib/api";
 
 /** Matches inline citation markers like [E1], [A2], [E12] */
-const CITE_RE = /\[([EA]\d+)\]/g;
+const INLINE_RE = /\*\*(.+?)\*\*|\*([^*\n]+?)\*|\[([EA]\d+)\]/g;
 
-function splitCitations(
+function renderInline(
   text: string,
   citationMap: Map<string, AnalysisCitation>,
+  keyPrefix: string,
 ): React.ReactNode[] {
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;
-  const re = new RegExp(CITE_RE.source, "g");
+  const re = new RegExp(INLINE_RE.source, "g");
   let match: RegExpExecArray | null;
+
   while ((match = re.exec(text)) !== null) {
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
-    const id = match[1];
-    const c = citationMap.get(id);
-    if (c) {
-      parts.push(
-        <a
-          key={`${id}-${match.index}`}
-          href={c.url}
-          target="_blank"
-          rel="noreferrer"
-          title={c.title}
-          className="inline-flex items-center rounded border border-accent/40 bg-accent/5 px-1 py-px text-[9px] font-medium text-accent/90 hover:bg-accent/15 hover:text-accent transition-colors mx-0.5 no-underline align-baseline"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {id}
-        </a>,
-      );
-    } else {
-      parts.push(match[0]);
+
+    if (match[1] !== undefined) {
+      // **bold**
+      parts.push(<strong key={`${keyPrefix}-b${match.index}`}>{match[1]}</strong>);
+    } else if (match[2] !== undefined) {
+      // *italic*
+      parts.push(<em key={`${keyPrefix}-i${match.index}`}>{match[2]}</em>);
+    } else if (match[3] !== undefined) {
+      // [E1] or [A2] citation
+      const id = match[3];
+      const c = citationMap.get(id);
+      if (c) {
+        parts.push(
+          <a
+            key={`${keyPrefix}-c${match.index}`}
+            href={c.url}
+            target="_blank"
+            rel="noreferrer"
+            title={c.title}
+            className="inline-flex items-center rounded border border-accent/40 bg-accent/5 px-1 py-px text-[9px] font-medium text-accent/90 hover:bg-accent/15 hover:text-accent transition-colors mx-0.5 no-underline align-baseline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {id}
+          </a>,
+        );
+      } else {
+        parts.push(match[0]);
+      }
     }
+
     lastIndex = match.index + match[0].length;
   }
+
   if (lastIndex < text.length) parts.push(text.slice(lastIndex));
   return parts.length ? parts : [text];
 }
 
-function processChildren(
-  children: React.ReactNode,
+function renderBlocks(
+  content: string,
   citationMap: Map<string, AnalysisCitation>,
-): React.ReactNode {
-  if (typeof children === "string") {
-    const parts = splitCitations(children, citationMap);
-    if (parts.length === 1 && typeof parts[0] === "string") return children;
-    return (
-      <>
-        {parts.map((p, i) => (
-          <Fragment key={i}>{p}</Fragment>
-        ))}
-      </>
-    );
-  }
-  if (Array.isArray(children)) {
-    return (
-      <>
-        {(children as React.ReactNode[]).map((child, i) => (
-          <Fragment key={i}>{processChildren(child, citationMap)}</Fragment>
-        ))}
-      </>
-    );
-  }
-  return children;
-}
+): React.ReactNode[] {
+  const lines = content.split("\n");
+  const blocks: React.ReactNode[] = [];
+  let listItems: React.ReactNode[] = [];
+  let listOrdered = false;
+  let paraLines: string[] = [];
+  let key = 0;
 
-function makeComponents(
-  citationMap: Map<string, AnalysisCitation>,
-): Components {
-  const wrap = (children: React.ReactNode) =>
-    processChildren(children, citationMap);
-  return {
-    p: ({ children }) => <p>{wrap(children)}</p>,
-    li: ({ children }) => <li>{wrap(children)}</li>,
-    h1: ({ children }) => <h1>{wrap(children)}</h1>,
-    h2: ({ children }) => <h2>{wrap(children)}</h2>,
-    h3: ({ children }) => <h3>{wrap(children)}</h3>,
-    strong: ({ children }) => <strong>{wrap(children)}</strong>,
-    em: ({ children }) => <em>{wrap(children)}</em>,
+  const flushPara = () => {
+    if (paraLines.length === 0) return;
+    const text = paraLines.join(" ").trim();
+    if (text) {
+      blocks.push(
+        <p key={key++}>
+          {renderInline(text, citationMap, `p${key}`).map((n, i) => (
+            <Fragment key={i}>{n}</Fragment>
+          ))}
+        </p>,
+      );
+    }
+    paraLines = [];
   };
+
+  const flushList = () => {
+    if (listItems.length === 0) return;
+    if (listOrdered) {
+      blocks.push(<ol key={key++}>{listItems}</ol>);
+    } else {
+      blocks.push(<ul key={key++}>{listItems}</ul>);
+    }
+    listItems = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      flushList();
+      flushPara();
+      continue;
+    }
+
+    // Headings: ## ... or ### ...
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushList();
+      flushPara();
+      const level = headingMatch[1].length;
+      const headingText = headingMatch[2];
+      const inlineContent = renderInline(headingText, citationMap, `h${level}-${key}`).map(
+        (n, i) => <Fragment key={i}>{n}</Fragment>,
+      );
+      switch (level) {
+        case 1: blocks.push(<h1 key={key++}>{inlineContent}</h1>); break;
+        case 2: blocks.push(<h2 key={key++}>{inlineContent}</h2>); break;
+        case 3: blocks.push(<h3 key={key++}>{inlineContent}</h3>); break;
+        default: blocks.push(<h4 key={key++}>{inlineContent}</h4>); break;
+      }
+      continue;
+    }
+
+    // Unordered list item: - ... or * ...
+    const ulMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    if (ulMatch) {
+      flushPara();
+      if (listOrdered) flushList();
+      listOrdered = false;
+      const itemContent = renderInline(ulMatch[1], citationMap, `li${key}`).map(
+        (n, i) => <Fragment key={i}>{n}</Fragment>,
+      );
+      listItems.push(<li key={key++}>{itemContent}</li>);
+      continue;
+    }
+
+    // Ordered list item: 1. ... 2. ...
+    const olMatch = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (olMatch) {
+      flushPara();
+      if (!listOrdered && listItems.length > 0) flushList();
+      listOrdered = true;
+      const itemContent = renderInline(olMatch[1], citationMap, `li${key}`).map(
+        (n, i) => <Fragment key={i}>{n}</Fragment>,
+      );
+      listItems.push(<li key={key++}>{itemContent}</li>);
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^[-*_]{3,}$/.test(trimmed)) {
+      flushList();
+      flushPara();
+      blocks.push(<hr key={key++} className="border-border/40 my-2" />);
+      continue;
+    }
+
+    // Regular paragraph text — accumulate consecutive lines
+    flushList();
+    paraLines.push(trimmed);
+  }
+
+  flushList();
+  flushPara();
+
+  return blocks;
 }
 
 export default function AnalysisRichText({
@@ -101,11 +180,13 @@ export default function AnalysisRichText({
       .map((c) => [c.id, c]),
   );
 
+  if (!content?.trim()) return null;
+
   return (
     <div className="ai-summary-content text-xs space-y-2">
-      <ReactMarkdown components={makeComponents(citationMap)}>
-        {content}
-      </ReactMarkdown>
+      {renderBlocks(content, citationMap).map((block, i) => (
+        <Fragment key={i}>{block}</Fragment>
+      ))}
     </div>
   );
 }

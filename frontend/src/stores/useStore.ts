@@ -726,7 +726,13 @@ export const useStore = create<AppState>()(
         analysisWindowByTopic: state.analysisWindowByTopic,
         briefCollapsedByTopic: state.briefCollapsedByTopic,
         eventFeedPrefsByTopic: state.eventFeedPrefsByTopic,
-        actionStates: state.actionStates,
+        // Reset any "running" states on hydration to prevent stuck buttons across sessions
+        actionStates: Object.fromEntries(
+          Object.entries(state.actionStates).map(([k, v]) => [
+            k,
+            v.status === "running" ? { ...v, status: "idle" as const } : v,
+          ])
+        ),
       }),
     }
   )
