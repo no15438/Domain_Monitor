@@ -1,14 +1,16 @@
 import asyncio
+import ipaddress
 import json
 import logging
 import threading
+import urllib.parse
 from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config import settings
 from database import (
@@ -72,7 +74,7 @@ from database import (
 from vector_store import delete_document
 from scheduler import start_scheduler, stop_scheduler
 from sse_manager import set_event_loop, sse_clients, notify_clients
-from pipeline import run_pipeline_once
+from pipeline import run_pipeline_once, regen_event_titles
 from chatbot import chat_stream_with_status
 from topic_summary import generate_summary_sync, generate_global_overview_sync, generate_evolution_report_sync
 from claim_lifecycle import evaluate_claim_lifecycle
@@ -153,8 +155,13 @@ async def _run_live_summary_background(topic_id: int, hours: int):
 async def _run_evolution_report_background(topic_id: int):
     key = f"evolution-{topic_id}"
     try:
-        await asyncio.to_thread(generate_evolution_report_sync, topic_id)
-        _bg_finish(key, result=f"generated evolution report for topic {topic_id}")
+        result = await asyncio.to_thread(generate_evolution_report_sync, topic_id)
+        # A real narrative always starts with a markdown section header (## 1. ...).
+        # A suppressed or skip run returns a plain explanation string.
+        if result and result.startswith("## "):
+            _bg_finish(key, result=f"generated evolution report for topic {topic_id}")
+        else:
+            _bg_finish(key, result=f"suppressed: {result}")
     except Exception as e:
         log.error("evolution-report error for topic %d: %s", topic_id, e)
         _bg_finish(key, error=str(e))
@@ -218,7 +225,7 @@ async def archived_topics_overview(hours: int = 24):
 
 
 class TopicReq(BaseModel):
-    name: str
+    name: str = Field(..., min_length=1, max_length=200)
     color: str = "#6366f1"
 
 
@@ -231,9 +238,9 @@ async def api_create_topic(req: TopicReq):
 
 
 class TopicUpdateReq(BaseModel):
-    name: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     color: Optional[str] = None
-    research_brief: Optional[str] = None
+    research_brief: Optional[str] = Field(default=None, max_length=10000)
     research_config: Optional[str] = None
     pipeline_config: Optional[str] = None
 
@@ -372,6 +379,32 @@ async def list_feeds(topic_id: int):
     return {"feeds": feeds}
 
 
+_PRIVATE_NETS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+]
+
+
+def _validate_feed_url(url: str) -> None:
+    """Reject non-http(s) schemes and private/internal IP addresses (SSRF guard)."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "Feed URL must use http or https")
+    host = parsed.hostname or ""
+    try:
+        addr = ipaddress.ip_address(host)
+        for net in _PRIVATE_NETS:
+            if addr in net:
+                raise HTTPException(400, "Feed URL must not point to private/internal addresses")
+    except ValueError:
+        pass  # hostname string, not a bare IP — allowed
+
+
 class FeedReq(BaseModel):
     feed_url: str
     label: str = ""
@@ -379,6 +412,7 @@ class FeedReq(BaseModel):
 
 @app.post("/api/topics/{topic_id}/feeds")
 async def api_add_feed(topic_id: int, req: FeedReq):
+    _validate_feed_url(req.feed_url)
     await asyncio.to_thread(add_topic_feed, topic_id, req.feed_url, req.label)
     return {"status": "ok"}
 
@@ -570,7 +604,9 @@ async def api_restore_event(event_id: str):
 
 @app.delete("/api/events/{event_id}")
 async def api_delete_event(event_id: str):
-    await asyncio.to_thread(delete_event_cluster, event_id)
+    deleted = await asyncio.to_thread(delete_event_cluster, event_id)
+    if not deleted:
+        raise HTTPException(404, "Event not found")
     return {"status": "deleted"}
 
 
@@ -588,9 +624,26 @@ async def api_event_detail_route(event_id: str):
     if detail is None:
         # Fallback: try sources-only for legacy event ids
         sources = await asyncio.to_thread(get_event_sources, event_id)
+        if not sources:
+            raise HTTPException(404, "Event not found")
         return {"event": None, "sources": sources}
     sources = detail.pop("sources", [])
     return {"event": detail, "sources": sources}
+
+
+# ── Admin: repair event titles ────────────────────────
+
+
+@app.post("/api/admin/regen-event-titles")
+async def api_regen_event_titles():
+    """Re-generate LLM titles for events whose title looks like a raw article headline.
+
+    Detects suspect titles (containing ' - ' outlet separator or length > 50 chars),
+    fetches associated article sources, and calls the cluster synthesis LLM to produce
+    a clean, standalone event card title.  Returns the count of updated events.
+    """
+    updated = await asyncio.to_thread(regen_event_titles)
+    return {"updated": updated}
 
 
 # ── Manual fetch ──────────────────────────────────────
@@ -728,7 +781,9 @@ class ToggleKeptReq(BaseModel):
 
 @app.put("/api/articles/{article_id}/keep")
 async def api_toggle_kept(article_id: str, req: ToggleKeptReq):
-    await asyncio.to_thread(toggle_article_kept, article_id, req.is_kept)
+    updated = await asyncio.to_thread(toggle_article_kept, article_id, req.is_kept)
+    if not updated:
+        raise HTTPException(404, "Article not found")
     return {"status": "ok"}
 
 
@@ -752,20 +807,26 @@ async def api_update_article(article_id: str, req: UpdateArticleReq):
 
 @app.delete("/api/articles/{article_id}")
 async def api_delete_article(article_id: str):
-    await asyncio.to_thread(delete_article, article_id)
+    deleted = await asyncio.to_thread(delete_article, article_id)
+    if not deleted:
+        raise HTTPException(404, "Article not found")
     await asyncio.to_thread(delete_document, article_id)
     return {"status": "ok"}
 
 
 @app.put("/api/articles/{article_id}/archive")
 async def api_archive_article(article_id: str):
-    await asyncio.to_thread(archive_article, article_id)
+    updated = await asyncio.to_thread(archive_article, article_id)
+    if not updated:
+        raise HTTPException(404, "Article not found")
     return {"status": "ok"}
 
 
 @app.put("/api/articles/{article_id}/restore")
 async def api_restore_article(article_id: str):
-    await asyncio.to_thread(restore_article, article_id)
+    updated = await asyncio.to_thread(restore_article, article_id)
+    if not updated:
+        raise HTTPException(404, "Article not found")
     return {"status": "ok"}
 
 
@@ -802,9 +863,17 @@ async def api_topic_ai_summary(topic_id: int):
     }
 
 
+async def _require_topic(topic_id: int) -> None:
+    """Raise 404 if the given topic_id does not exist."""
+    topics = await asyncio.to_thread(get_topics)
+    if not any(t["id"] == topic_id for t in topics):
+        raise HTTPException(404, f"Topic {topic_id} not found")
+
+
 @app.post("/api/topics/{topic_id}/ai-summary/generate")
 async def api_generate_topic_summary(topic_id: int, hours: int = 24):
     """Start Live AI summary generation in background (non-streaming, persists)."""
+    await _require_topic(topic_id)
     key = f"live-{topic_id}"
     if not _bg_try_start(key):
         return {"started": False, "already_running": True}
@@ -839,6 +908,7 @@ async def api_topic_global_overview(topic_id: int):
 @app.post("/api/topics/{topic_id}/global-overview/generate")
 async def api_generate_global_overview(topic_id: int):
     """Start Global Overview generation in a background task (persists even if client disconnects)."""
+    await _require_topic(topic_id)
     key = f"global-{topic_id}"
     if not _bg_try_start(key):
         return {"started": False, "already_running": True}
@@ -867,6 +937,7 @@ async def api_synthesis_global_overview(topic_id: int):
 
 @app.post("/api/topics/{topic_id}/synthesis/global-overview/generate")
 async def api_synthesis_generate_global_overview(topic_id: int):
+    await _require_topic(topic_id)
     key = f"global-{topic_id}"
     if not _bg_try_start(key):
         return {"started": False, "already_running": True}
@@ -894,6 +965,7 @@ async def api_synthesis_evolution_report(topic_id: int):
 
 @app.post("/api/topics/{topic_id}/synthesis/evolution-report/generate")
 async def api_generate_evolution_report(topic_id: int):
+    await _require_topic(topic_id)
     key = f"evolution-{topic_id}"
     if not _bg_try_start(key):
         return {"started": False, "already_running": True}
@@ -921,7 +993,7 @@ class ChatHistoryMessage(BaseModel):
 
 
 class ChatReq(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=4000)
     article_context: str | None = None
     topic_id: int | None = None
     history: list[ChatHistoryMessage] = []
