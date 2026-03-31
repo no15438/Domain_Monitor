@@ -127,10 +127,17 @@ Research Brief: {research_brief}
 
 Return a JSON array of exactly {n} objects (SAME ORDER as clusters above).
 Each object must have:
-- "event_title": 10-15 word title that describes WHAT HAPPENED specifically (not generic)
+- "event_title": a short, standalone title describing WHAT HAPPENED
 - "event_summary": 2-3 sentences synthesizing key facts across ALL sources in this cluster
 
-Write in the same language as the source articles.
+Rules for event_title:
+- Use ≤20 words. Write in the same language as the source articles.
+- Describe the event as a standalone fact, NOT a headline copy.
+- Do NOT include any source/outlet/media name (e.g. do not append "- 凤凰网汽车" or "- Reuters").
+- Do NOT start with phrases like "报道：" or "媒体称：".
+- Good example: "美国封堵中国电动汽车经加拿大转运入境路径"
+- Bad example:  "绝无可能进入美国市场！美驻加拿大大使表态严防借道入美 - 凤凰网汽车"
+
 Return ONLY a valid JSON array. No markdown fences, no explanation."""
 
 
@@ -175,23 +182,28 @@ def _synthesize_cluster_events(
             research_brief=context_params.get("research_brief", "(not specified)"),
         )
 
-        try:
-            raw = llm_chat([{"role": "user", "content": prompt}])
-            raw = raw.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
-            parsed_list = json.loads(raw)
-            if isinstance(parsed_list, list) and len(parsed_list) == len(batch):
-                for j, synth in enumerate(parsed_list):
-                    results[batch_start + j] = synth if isinstance(synth, dict) else {}
-            else:
-                log.warning(
-                    "cluster synthesis returned %s items, expected %d — skipping",
-                    len(parsed_list) if isinstance(parsed_list, list) else type(parsed_list).__name__,
-                    len(batch),
-                )
-        except Exception as e:
-            log.error("cluster synthesis LLM error: %s", e)
+        for attempt in range(2):
+            try:
+                raw = llm_chat([{"role": "user", "content": prompt}])
+                raw = raw.strip()
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+                parsed_list = json.loads(raw)
+                if isinstance(parsed_list, list) and len(parsed_list) == len(batch):
+                    for j, synth in enumerate(parsed_list):
+                        results[batch_start + j] = synth if isinstance(synth, dict) else {}
+                    break  # success — no retry needed
+                else:
+                    log.warning(
+                        "cluster synthesis returned %s items, expected %d (attempt %d/2)",
+                        len(parsed_list) if isinstance(parsed_list, list) else type(parsed_list).__name__,
+                        len(batch),
+                        attempt + 1,
+                    )
+            except Exception as e:
+                log.warning("cluster synthesis LLM error (attempt %d/2): %s", attempt + 1, e)
+                if attempt == 1:
+                    log.error("cluster synthesis failed after 2 attempts — event titles will fall back to article title")
 
         log.info("cluster synthesis: processed %d cluster(s)", len(batch))
 
@@ -624,10 +636,10 @@ def _enrich_and_store(
                 )
 
                 event_size = item.get("_event_size", 1)
+                event_status = "stabilized" if event_size >= 3 else "active"
                 # Only create/update an event record for multi-source clusters (2+ articles).
                 # Single-article entries remain as plain articles in the news feed only.
                 if event_size >= 2:
-                    event_status = "stabilized" if event_size >= 3 else "active"
                     upsert_event(
                         topic_id=topic_id,
                         event_id=event_id,
@@ -977,3 +989,103 @@ def run_pipeline_once(topic_id: int | None = None) -> list[dict]:
                 all_new.extend(_enrich_and_store(canonicals, None, existing_urls))
 
     return all_new
+
+
+# ── Event title repair ─────────────────────────────────────────────────────────
+
+_REGEN_TITLES_BATCH = 10
+
+# Heuristic: title is likely a raw article title if it contains " - " (outlet separator)
+# or is very long (>50 chars suggests a verbatim headline copy).
+_SUSPECT_TITLE_SQL = """
+SELECT e.id AS event_id, e.title AS current_title, e.topic_id
+FROM events_v2 e
+WHERE e.title LIKE '% - %'
+   OR LENGTH(e.title) > 50
+ORDER BY e.last_seen_at DESC
+"""
+
+_ARTICLE_SOURCES_SQL = """
+SELECT a.title, a.source
+FROM articles a
+WHERE a.event_id = ?
+ORDER BY a.is_canonical DESC, a.source_score DESC
+LIMIT 5
+"""
+
+
+def regen_event_titles() -> int:
+    """Re-generate LLM titles for events whose title looks like a raw article headline.
+
+    Returns the number of events updated.
+    """
+    from database import _conn  # local import to avoid circular at module level
+
+    db = _conn()
+    suspect_rows = db.execute(_SUSPECT_TITLE_SQL).fetchall()
+    db.close()
+
+    if not suspect_rows:
+        log.info("regen_event_titles: no suspect titles found")
+        return 0
+
+    log.info("regen_event_titles: found %d events with suspect titles", len(suspect_rows))
+
+    updated = 0
+    for batch_start in range(0, len(suspect_rows), _REGEN_TITLES_BATCH):
+        batch = suspect_rows[batch_start: batch_start + _REGEN_TITLES_BATCH]
+
+        # Build cluster blocks from associated articles
+        cluster_blocks: list[str] = []
+        for row in batch:
+            db2 = _conn()
+            art_rows = db2.execute(_ARTICLE_SOURCES_SQL, (row["event_id"],)).fetchall()
+            db2.close()
+            if not art_rows:
+                # No associated articles — skip synthesising, nothing to work from
+                cluster_blocks.append(
+                    f"Cluster (current title): \"{row['current_title']}\""
+                )
+            else:
+                lines = [f'"{r["title"]}" ({r["source"]})' for r in art_rows]
+                cluster_blocks.append(
+                    f"Cluster ({len(art_rows)} sources):\n" + "\n".join(lines)
+                )
+
+        prompt = CLUSTER_SYNTHESIS_PROMPT.format(
+            n=len(batch),
+            clusters_block="\n\n".join(cluster_blocks),
+            topic_name="(repair run)",
+            research_brief="(repair run — generate clean event card titles)",
+        )
+
+        for attempt in range(2):
+            try:
+                from llm_client import llm_chat
+                raw = llm_chat([{"role": "user", "content": prompt}])
+                raw = raw.strip()
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+                parsed_list = json.loads(raw)
+                if isinstance(parsed_list, list) and len(parsed_list) == len(batch):
+                    db3 = _conn()
+                    for row, synth in zip(batch, parsed_list):
+                        new_title = synth.get("event_title", "").strip() if isinstance(synth, dict) else ""
+                        if new_title:
+                            db3.execute(
+                                "UPDATE events_v2 SET title = ? WHERE id = ?",
+                                (new_title, row["event_id"]),
+                            )
+                            updated += 1
+                    db3.commit()
+                    db3.close()
+                    break
+                else:
+                    log.warning(
+                        "regen_event_titles: unexpected response length (attempt %d/2)", attempt + 1
+                    )
+            except Exception as exc:
+                log.warning("regen_event_titles LLM error (attempt %d/2): %s", attempt + 1, exc)
+
+    log.info("regen_event_titles: updated %d event titles", updated)
+    return updated
