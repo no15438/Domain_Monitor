@@ -726,11 +726,15 @@ export const useStore = create<AppState>()(
         analysisWindowByTopic: state.analysisWindowByTopic,
         briefCollapsedByTopic: state.briefCollapsedByTopic,
         eventFeedPrefsByTopic: state.eventFeedPrefsByTopic,
-        // Reset any "running" states on hydration to prevent stuck buttons across sessions
+        // Reset transient states on hydration: "running" tasks never completed (process
+        // was killed) and "error" states from a previous session reflect stale backend
+        // errors (e.g. ChromaDB crash) that may no longer be valid.
         actionStates: Object.fromEntries(
           Object.entries(state.actionStates).map(([k, v]) => [
             k,
-            v.status === "running" ? { ...v, status: "idle" as const } : v,
+            v.status === "running" || v.status === "error"
+              ? { ...v, status: "idle" as const, error: null }
+              : v,
           ])
         ),
       }),

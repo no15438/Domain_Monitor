@@ -119,7 +119,8 @@ Rules:
 - Perform an internal freshness reasoning pass before writing (recency, consistency, corroboration), but do NOT reveal hidden reasoning steps.
 - If information appears old or uncertain, lower confidence in wording and place it in Timeliness Assessment.
 - Reflect narrative evolution in existing sections: new events appearing, old events being superseded, and claim strengthening/weakening.
-- Citation: when you state a fact supported by a source in the [Citation Catalog], append its ID inline right after the statement: e.g. "Growth slowed [E1] amid supply issues [A2]." Use square brackets only; never invent IDs."""
+- Citation: when you state a fact supported by a source in the [Citation Catalog], append its ID inline right after the statement: e.g. "Growth slowed [E1] amid supply issues [A2]." Use square brackets only; never invent IDs.
+- ONLY use E# and A# IDs from the [Citation Catalog] as inline citations. Do NOT use context reference labels like [Claim-N], [Event-N], [Evidence-N] as citations in the output."""
 
 
 def _coerce_dt(raw: str | None) -> datetime | None:
@@ -483,6 +484,22 @@ def _normalize_citations(text: str, catalog: list[CitationItem]) -> str:
     # Ensure space between adjacent citation badges: [E1][E2] → [E1] [E2]
     text = _re.sub(r"\]\s*\[", "] [", text)
 
+    # Downgrade context-reference pseudo-citations to plain readable text.
+    # These have no catalog entry and cannot become clickable buttons.
+    # Handles variants: mixed-case, spaces around hyphen, en-dash, em-dash.
+    # e.g. [Claim-12] -> "Claim 12", [Event-7] -> "Event 7", [claim - 3] -> "Claim 3"
+    def _downgrade_pseudo(m: "_re.Match[str]") -> str:
+        kind = m.group(1).capitalize()
+        num = m.group(2)
+        return f"{kind} {num}"
+
+    text = _re.sub(
+        r"\[(Claim|Event|Evidence|Evolution)\s*[-\u2013\u2014]\s*(\d+)\]",
+        _downgrade_pseudo,
+        text,
+        flags=_re.IGNORECASE,
+    )
+
     return text
 
 
@@ -575,7 +592,7 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
             for i, event in enumerate(events[:15], 1):
                 analysis_ts = _analysis_time_text(event)
                 parts.append(
-                    f"  [Event-{i}] {event['title']} "
+                    f"  EventRef {i}: {event['title']} "
                     f"(status: {event.get('status', '?')}, "
                     f"lifecycle: {event.get('event_status', '?')}, "
                     f"analysis_time: {analysis_ts}, "
@@ -589,7 +606,7 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
             parts.append("\n[Active claims]")
             for i, claim in enumerate(claims[:15], 1):
                 parts.append(
-                    f"  [Claim-{i}] {claim['statement']}\n"
+                    f"  ClaimRef {i}: {claim['statement']}\n"
                     f"      lifecycle: {claim.get('status', '?')} · "
                     f"kind: {claim.get('claim_kind', claim.get('claim_type', '?'))} · "
                     f"staleness: {claim.get('staleness_status', '?')} · "
@@ -601,7 +618,7 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
             parts.append("\n[Claim evolution signals]")
             for i, evo in enumerate(claim_evolution[:12], 1):
                 parts.append(
-                    f"  [Evolution-{i}] relation: {evo.get('relation_type', '?')} · "
+                    f"  EvolutionRef {i}: relation: {evo.get('relation_type', '?')} · "
                     f"claim_id: {evo.get('claim_id', '')} · previous_claim_id: {evo.get('previous_claim_id', '')} · "
                     f"time: {evo.get('created_at', '')}\n"
                     f"      reason: {evo.get('reason', '')}"
@@ -910,7 +927,8 @@ Rules:
 - Perform an internal freshness reasoning pass before writing (recency, consistency, corroboration), but do NOT reveal hidden reasoning chains.
 - Prefer newer snapshots/events/claims when older evidence conflicts; explicitly down-rank stale evidence in section 5.
 - Explicitly capture narrative evolution in existing sections (new events, replaced/obsolete events, claim strengthening/weakening).
-- Citation: when you state a fact supported by a source in the [Citation Catalog], append its ID inline right after the statement: e.g. "Growth slowed [E1] amid supply issues [A2]." Use square brackets only; never invent IDs."""
+- Citation: when you state a fact supported by a source in the [Citation Catalog], append its ID inline right after the statement: e.g. "Growth slowed [E1] amid supply issues [A2]." Use square brackets only; never invent IDs.
+- ONLY use IDs from the [Citation Catalog] (E# and A# format) as inline citations. Do NOT reference context labels like ClaimRef, EventRef, EvidenceRef, EvolutionRef, [Claim-N], [Event-N], [Evidence-N], or [Evidence-N] as citations in the output."""
 
 
 def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | None]:
@@ -980,7 +998,7 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
         for i, event in enumerate(events[:15], 1):
             analysis_ts = _analysis_time_text(event)
             ctx_parts.append(
-                f"[Event-{i}] {event.get('title', '')}\n"
+                f"EventRef {i}: {event.get('title', '')}\n"
                 f"Status: {event.get('status', '?')} · "
                 f"Lifecycle: {event.get('event_status', '?')} · "
                 f"analysis_time: {analysis_ts} · "
@@ -994,7 +1012,7 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
         ctx_parts.append("=== Active Claims ===")
         for i, claim in enumerate(claims, 1):
             ctx_parts.append(
-                f"[Claim-{i}] {claim['statement']}\n"
+                f"ClaimRef {i}: {claim['statement']}\n"
                 f"Lifecycle: {claim.get('status', '?')} · Kind: {claim.get('claim_kind', claim.get('claim_type', '?'))} · "
                 f"staleness: {claim.get('staleness_status', '?')} · "
                 f"last_validated: {claim.get('last_validated_at', '')} · "
@@ -1005,7 +1023,7 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
         ctx_parts.append("=== Claim Evolution Signals ===")
         for i, evo in enumerate(claim_evolution[:15], 1):
             ctx_parts.append(
-                f"[Evolution-{i}] relation={evo.get('relation_type', '?')} "
+                f"EvolutionRef {i}: relation={evo.get('relation_type', '?')} "
                 f"claim_id={evo.get('claim_id', '')} previous_claim_id={evo.get('previous_claim_id', '')}\n"
                 f"created_at={evo.get('created_at', '')}\n"
                 f"reason={evo.get('reason', '')}"
@@ -1015,7 +1033,7 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
         ctx_parts.append("=== Evidence Sets ===")
         for i, evidence in enumerate(evidence_sets[:10], 1):
             ctx_parts.append(
-                f"[Evidence-{i}] {evidence['title']}\n"
+                f"EvidenceRef {i}: {evidence['title']}\n"
                 f"Type: {evidence.get('evidence_type', '?')} · Stance: {evidence.get('stance', '?')}\n"
                 f"Created: {evidence.get('created_at', '')} · Updated: {evidence.get('updated_at', '')}\n"
                 f"Summary: {evidence.get('summary', '')}"
@@ -1403,7 +1421,7 @@ def _render_evolution_debug_context(bundle: EvolutionFactBundle) -> str:
         ctx_parts.append("=== Evidence Sets ===")
         for i, ev in enumerate(bundle.evidence_sets, 1):
             ctx_parts.append(
-                f"[Evidence-{i}] {ev['title']}\n"
+                f"EvidenceRef {i}: {ev['title']}\n"
                 f"  Type={ev.get('evidence_type', '?')} · Stance={ev.get('stance', '?')}\n"
                 f"  {ev.get('summary', '')}"
             )

@@ -818,6 +818,63 @@ class TestNormalizeCitations:
                 f"Bare {cid!r} must not remain in: {result!r}"
             )
 
+    # ── pseudo-citation downgrade ─────────────────────────────────────────────
+
+    def test_claim_pseudo_cite_downgraded_to_plain_text(self):
+        """[Claim-12] must become 'Claim 12' with no square brackets."""
+        result = _normalize_citations("来源不明 [Claim-12]。", self.CATALOG)
+        assert "[Claim-12]" not in result
+        assert "Claim 12" in result
+
+    def test_event_pseudo_cite_downgraded_to_plain_text(self):
+        result = _normalize_citations("详情见 [Event-7]。", self.CATALOG)
+        assert "[Event-7]" not in result
+        assert "Event 7" in result
+
+    def test_evidence_pseudo_cite_downgraded(self):
+        result = _normalize_citations("参考 [Evidence-3]。", self.CATALOG)
+        assert "[Evidence-3]" not in result
+        assert "Evidence 3" in result
+
+    def test_evolution_pseudo_cite_downgraded(self):
+        result = _normalize_citations("演化记录 [Evolution-2]。", self.CATALOG)
+        assert "[Evolution-2]" not in result
+        assert "Evolution 2" in result
+
+    def test_pseudo_cite_lowercase_variant_downgraded(self):
+        """[claim-5] (lower-case) must also be downgraded."""
+        result = _normalize_citations("见 [claim-5]。", self.CATALOG)
+        assert "[claim-5]" not in result
+        assert "Claim 5" in result
+
+    def test_pseudo_cite_with_space_around_hyphen(self):
+        """[Claim - 12] with spaces around hyphen must be downgraded."""
+        result = _normalize_citations("依据 [Claim - 12] 的陈述。", self.CATALOG)
+        assert "[Claim - 12]" not in result
+        assert "Claim 12" in result
+
+    def test_pseudo_cite_en_dash_variant(self):
+        """[Claim–12] with en-dash must be downgraded."""
+        result = _normalize_citations("见 [Claim\u201312]。", self.CATALOG)
+        assert "[Claim\u201312]" not in result
+        assert "Claim 12" in result
+
+    def test_pseudo_cites_do_not_affect_real_catalog_ids(self):
+        """Pseudo-cite stripping must not corrupt legitimate [E1] / [A1] nearby."""
+        text = "政策 [E1] 升级，见 [Claim-12] 的背景说明，及 [A1] 的报道。"
+        result = _normalize_citations(text, self.CATALOG)
+        assert "[E1]" in result
+        assert "[A1]" in result
+        assert "[Claim-12]" not in result
+        assert "Claim 12" in result
+
+    def test_pseudo_cite_in_table_cell_context(self):
+        """Pseudo-cites inside markdown table cells must also be cleaned."""
+        text = "| 丰田/华为合作 | Needs Verification | 详情待确认 | [Claim-12] |"
+        result = _normalize_citations(text, self.CATALOG)
+        assert "[Claim-12]" not in result
+        assert "Claim 12" in result
+
 
 # ── Tests: generic vs grounded narrative regression ───────────────────────────
 

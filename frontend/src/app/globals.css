@@ -161,6 +161,34 @@ body {
   border-radius: 3px;
   font-size: 0.85em;
 }
+.ai-summary-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.7rem;
+  /* Outer frame — mix foreground so grid reads clearly on dark + light themes */
+  border: 1px solid color-mix(in srgb, var(--foreground) 22%, var(--border));
+  border-radius: 4px;
+  overflow: hidden;
+}
+.ai-summary-content th,
+.ai-summary-content td {
+  padding: 0.25em 0.5em;
+  border: 1px solid color-mix(in srgb, var(--foreground) 18%, var(--border));
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.ai-summary-content th {
+  font-weight: 600;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--surface-hover) 60%, transparent);
+  border-bottom-width: 1px;
+}
+.ai-summary-content tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--surface-hover) 30%, transparent);
+}
 
 @keyframes slide-in-right {
   from { transform: translateX(100%); }
