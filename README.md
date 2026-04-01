@@ -1,106 +1,464 @@
 # Domain Monitor — AI-Powered Industry Intelligence
 
-Real-time industry monitoring system powered by AI. Automatically fetches, deduplicates, clusters, summarizes, and categorizes industry news from multiple sources. Includes a RAG-powered AI chatbot for interactive exploration.
+Real-time industry monitoring system powered by AI. Automatically fetches, deduplicates, clusters, summarizes, and categorizes industry news from multiple sources. Builds a structured, time-aware knowledge base over time, and exposes it through an AI chatbot that uses a multi-layer RAG pipeline to answer questions with full temporal awareness.
 
-## Architecture
+---
+
+## Table of Contents
+
+- [System Architecture](#system-architecture)
+- [Features](#features)
+  - [Topic Management](#topic-management)
+  - [Research Brief](#research-brief)
+  - [Data Pipeline](#data-pipeline)
+  - [Knowledge Base & Event Lifecycle](#knowledge-base--event-lifecycle)
+  - [AI Analysis (Realtime Tab)](#ai-analysis-realtime-tab)
+  - [Global Overview](#global-overview)
+  - [Alert Signals](#alert-signals)
+  - [AI Assistant — Multi-Layer RAG Chatbot](#ai-assistant--multi-layer-rag-chatbot)
+- [RAG Pipeline — How It Works](#rag-pipeline--how-it-works)
+- [Context Engineering](#context-engineering)
+- [Tech Stack](#tech-stack)
+- [Quick Start](#quick-start)
+- [Environment Variables](#environment-variables)
+- [API Reference](#api-reference)
+
+---
+
+## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  Scheduled / Manual Fetch                                       │
-│    ↓                                                            │
-│  Stage 1 — Recall: NewsAPI · Google News RSS · RSS Feeds ·     │
-│            Event Registry · Tavily                             │
-│    ↓                                                            │
-│  Stage 2 — Precision: URL dedup → Semantic dedup (TF-IDF) →   │
-│            Keyword relevance → Event clustering →              │
-│            Canonical selection (authority + coverage score)    │
-│    ↓                                                            │
-│  Stage 3 — Enrich: LLM batch summarize / tag / sentiment /    │
-│            importance / topic analysis (canonical only)        │
-│    ↓                                                            │
-│  Stage 4 — Store: SQLite + ChromaDB vector store               │
-│    ↓                                                            │
-│  SSE Push → Frontend                                           │
-├─────────────────────────────────────────────────────────────────┤
-│  Frontend (Next.js App Router)                                  │
-│    Homepage: Topic cards (create / rename / delete)            │
-│    Topic page: 3-column layout                                 │
-│      Left:   Research Brief (AI-generated plan, CRUD)          │
-│      Middle: Event feed (right-click context menu)             │
-│      Right:  Analysis Panel                                    │
-│                Realtime tab: AI Analysis + Signals             │
-│                Overview tab: Global Overview + Snapshots +     │
-│                             Core Articles + Macro Signals      │
-│    AI Chatbot (RAG: articles + snapshots + global overview)    │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│  DATA INGESTION                                                          │
+│                                                                          │
+│  Sources: NewsAPI · Google News RSS · User RSS Feeds ·                   │
+│           Event Registry · Tavily Web Search                             │
+│    ↓                                                                     │
+│  Stage 1  Collect        parallel fetch from all sources                 │
+│  Stage 2  URL dedup      normalize + drop exact-URL duplicates           │
+│  Stage 3  Semantic dedup TF-IDF cosine; keep most-authoritative per      │
+│                          near-duplicate cluster (threshold: 0.82)        │
+│  Stage 4  Relevance      3-tier keyword match; drop off-topic articles   │
+│  Stage 5  Event cluster  group semantically related articles → events    │
+│  Stage 6  Canonical sel. score by authority + coverage; pick best repr.  │
+│  Stage 7  LLM enrich     batch: summary / tags / sentiment /             │
+│                          importance (1–10) / topic analysis              │
+│    ↓                                                                     │
+│  Storage: SQLite (structured) + ChromaDB (vector embeddings)             │
+│    ↓                                                                     │
+│  SSE Push → Frontend                                                     │
+├──────────────────────────────────────────────────────────────────────────┤
+│  KNOWLEDGE SYNTHESIS (scheduled)                                         │
+│                                                                          │
+│  Snapshot engine    daily AI snapshots of domain state                   │
+│  Claim tracker      extract & evolve key claims (fresh→stale→superseded) │
+│  Global Overview    long-term macro synthesis from all snapshots         │
+│  Evolution Report   narrative of how the domain changed over time        │
+├──────────────────────────────────────────────────────────────────────────┤
+│  FRONTEND (Next.js App Router)                                           │
+│                                                                          │
+│  Homepage:    Topic cards (create / rename / delete)                     │
+│  Topic page:  3-column layout                                            │
+│    Left:      Research Brief (AI-generated research plan, CRUD)          │
+│    Middle:    Event feed (right-click context menu)                      │
+│    Right:     Analysis Panel                                             │
+│               Realtime tab: AI Analysis + Alert Signals                  │
+│               Overview tab: Global Overview · Snapshots ·                │
+│                             Core Articles · Macro Signals                │
+│  AI Chatbot:  RAG-powered chat (replaces right panel while open)         │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Features
+
+### Topic Management
+
+- Create multiple independent monitoring topics (e.g., "AI in Healthcare", "China Macro")
+- Each topic has its own color label, research brief, keyword list, RSS feeds, event feed, AI analysis, and chat history
+- Topics can be archived or deleted; archived topics remain queryable
+
+### Research Brief
+
+Natural-language research direction → AI-generated structured plan:
+
+- **Keywords** — search terms used by all collectors
+- **RSS Feeds** — auto-suggested relevant feeds, user-editable
+- **Research Angles** — thematic lenses to monitor
+- **Key Entities** — companies, people, or organizations to track
+- **Geographic & Sector Scope** — filters for the pipeline
+
+All generated items are fully user-editable (CRUD). The brief is re-injectable at any time to regenerate the plan.
+
+### Data Pipeline
+
+Multi-stage recall-then-precision pipeline triggered on schedule (default: every 15 minutes) or manually via "Fetch Now":
+
+| Stage | What happens |
+|---|---|
+| **1. Collect** | Parallel fetch from NewsAPI, Google News RSS, user-added RSS feeds, Event Registry, Tavily |
+| **2. URL dedup** | Normalize URLs; drop exact-URL duplicates |
+| **3. Semantic dedup** | TF-IDF cosine similarity; clusters near-duplicates and keeps the most authoritative source (highest domain authority + coverage score) |
+| **4. Relevance filter** | Three-tier keyword matching (exact phrase → space-collapsed → any-word); configurable minimum threshold |
+| **5. Event clustering** | Groups semantically similar articles into event clusters using TF-IDF similarity |
+| **6. Canonical selection** | Scores each source within a cluster by authority signals + number of other sources covering the same story; elects one canonical article per cluster |
+| **7. LLM enrichment** | Single batch LLM call per canonical article: generates summary, tags, sentiment (positive/neutral/negative), importance score (1–10), and topic-specific analysis |
+
+### Knowledge Base & Event Lifecycle
+
+#### Events
+
+Each **event** is a semantically deduplicated cluster of related news articles that the pipeline groups together into a single named story. It is not a raw article — it is the system's best understanding of one discrete development, backed by one or more source articles.
+
+**How an event is created:**
+
+1. The deduplication stage groups near-duplicate articles using TF-IDF cosine similarity
+2. The canonical selection stage elects the most authoritative article in each cluster as the representative
+3. The LLM enrichment stage generates a short event **summary**, **tags**, **sentiment**, and **importance score** for the canonical article only
+4. The event is stored in `events_v2` with references back to all contributing source articles in `event_sources`
+
+**What an event contains:**
+
+| Field | Description |
+|---|---|
+| `title` | LLM-generated headline |
+| `summary` | LLM-written summary of the cluster (≤ 240 chars displayed) |
+| `canonical_article_id` | The elected best-representative article |
+| `first_seen_at` / `last_seen_at` | Observation window — when this story was first and most recently seen |
+| `stability_score` | 0–1 score reflecting how consistently this event has been covered across multiple independent sources; high stability = well-confirmed story |
+| `fact_confidence` | Confidence in the factual claims within the event |
+| `status` | `active`, `archived`, `superseded` |
+| `supersedes_event_id` | If this event supersedes an older one, links to the predecessor |
+
+**Source citations on events** — every event maintains an `event_sources` link table connecting it to all raw news articles that contributed to the cluster. In the UI, clicking an event card shows the canonical source; expanding the card reveals all alternative sources that covered the same story.
+
+**Article states** (managed via right-click context menu on any article card):
+
+| State | Meaning |
+|---|---|
+| **Active** | Visible in the main event feed |
+| **Knowledge Base** | Bookmarked as important; surfaced in Overview → Core Articles |
+| **Archived** | Hidden from main feed; visible in collapsible section |
+| **Deleted** | Permanently removed |
+
+**Importance decay** — article importance scores apply exponential time decay (half-life ≈ 7 days), so older items naturally drop in sort order relative to new arrivals.
+
+---
+
+#### Claims
+
+A **claim** is a structured, reusable piece of knowledge extracted from the event stream — a distilled assertion about the domain that can be tracked, strengthened, or invalidated as new evidence arrives. Claims live independently of individual articles; they are the system's long-term memory.
+
+**Claim types (`claim_type`):**
+
+| Type | Example |
+|---|---|
+| `fact` | "China's QFII quota was expanded by $50B on March 31, 2026" |
+| `trend` | "Institutional foreign inflows into A-shares have been increasing for 6 consecutive weeks" |
+| `risk` | "Escalating tariff uncertainty is suppressing IPO activity in the TMT sector" |
+| `signal` | "PMI fell below 50 for the second consecutive month" |
+
+**Claim lifecycle:**
+
+| State | Meaning |
+|---|---|
+| **Fresh** | Actively supported by recent evidence; safe to present as current |
+| **Stale** | No new supporting signal in the past N days; treat with caution |
+| **Superseded** | A newer, contradictory or updated claim has replaced this one |
+| **Inactive** | Claim stopped receiving any support; demoted but preserved for archive |
+
+Each claim carries `last_validated_at` (when it last received supporting evidence) and a configurable `decay_policy` (`fast` / `medium` / `slow`) that controls how quickly it transitions from fresh → stale.
+
+**How claims relate to events:**
+
+- Claims are linked to the events that support them via `supporting_evidence_ids`
+- Each event can spawn one or more claims; each claim can be supported by multiple events
+- When a new event contradicts an existing claim, the system can mark the old claim as `superseded` and create a replacement, recording the transition in `claim_evolution`
+
+**Claim evolution log** — every time a claim's status changes, a `claim_evolution` record is written:
+
+```
+relation_type: strengthened | weakened | superseded | reinstated
+reason:        "New trade data confirms Q1 export growth"
+created_at:    2026-03-25
+```
+
+This log is surfaced directly in the RAG chatbot's timeline layer, giving the LLM an explicit change-log of how the domain's key assertions have evolved over time rather than requiring it to infer change from static snapshots.
+
+---
+
+#### Snapshots & Deltas
+
+The system periodically generates a **temporal snapshot** — an AI-written summary of the domain state at a point in time. Each snapshot:
+
+- Records which events (`snapshot_events`) and claims (`snapshot_claims`) were active at that moment
+- Is stored alongside computed statistics (`stats_metadata`)
+
+When a new snapshot is created, the system computes a **snapshot delta** against the previous one:
+
+```
+change_summary:           "Regulatory tone shifted from restrictive to accommodative;
+                           two new QFII quota expansions announced."
+new_event_ids:            [...] — events that appeared since last snapshot
+resolved_event_ids:       [...] — events that dropped out
+strengthened_claim_ids:   [...] — claims that gained supporting evidence
+weakened_claim_ids:       [...] — claims that lost support
+superseded_claim_ids:     [...] — claims replaced by newer ones
+```
+
+Deltas are exposed in the RAG chatbot's timeline layer under `[Snapshot Deltas — What Changed]`, making temporal evolution queries highly accurate without requiring the LLM to diff two large documents.
+
+### AI Analysis (Realtime Tab)
+
+LLM-generated narrative analysis of the topic, updated on demand or on a schedule:
+
+- Synthesizes the most recent events, claims, and signals into a coherent narrative
+- Includes **Notable Signals** (alert-worthy developments) and an **Outlook** section
+- Contains inline **cite buttons** linking to source articles:
+  - Article cite → opens original article URL
+  - Event cite → opens event canonical source URL
+  - Hovering shows source title; missing citation data falls back gracefully to plain text
+
+### Global Overview
+
+Long-term macro analysis synthesized from all historical AI snapshots:
+
+- Covers domain evolution, persistent themes, key entity trajectories, and trend direction
+- Narrative evolution (event turnover, claim strengthening/weakening/superseding) is merged into the overview text rather than kept as a separate panel
+- Regenerable on demand; the most recent artifact is cached and served instantly
+
+### Alert Signals
+
+Rule-based signals computed over the configured time window:
+
+| Signal | Threshold |
+|---|---|
+| High negative sentiment | ≥ 40% of recent articles are negative |
+| Elevated negative sentiment | ≥ 30% of recent articles are negative |
+| Volume surge | Current-period article count ≥ 2× the previous period |
+| High importance density | ≥ 40% of articles with importance ≥ 8 |
+
+Time-window metrics use `published_at` as the primary timestamp, falling back to `created_at` when publish time is unavailable.
+
+### AI Assistant — Multi-Layer RAG Chatbot
+
+RAG-powered conversational assistant with full temporal awareness. See [RAG Pipeline — How It Works](#rag-pipeline--how-it-works) for the full technical breakdown.
+
+**Key user-facing features:**
+
+- **Article context injection** — clicking "Ask AI" on an event card pre-loads that article's full metadata and content into the chat context
+- **Inline citation buttons** — responses contain clickable `[Source Title]` chips; clicking a knowledge-base item (event, snapshot) navigates directly to it in the Overview panel without opening a new page
+- **RAG thinking bar** — shows a concise trace of which knowledge layers were activated, how many records were retrieved, and the final execution path; expandable for step-by-step detail
+- **Multi-turn history** — the last 8 messages are passed to the LLM for conversational continuity
+- **Per-topic persistence** — chat history is saved to `localStorage` per topic and survives page refreshes
+
+---
+
+## RAG Pipeline — How It Works
+
+Every chat message goes through a fully automated 9-step pipeline. Users send a plain question; the system decides everything else.
+
+```
+User question
+      │
+      ▼
+ 1. Classify intent          lightweight LLM call (temp=0)
+    → which layers needed?   needs_current_state / needs_timeline / needs_archive
+    → how far back?          time_window_days (7 / 14 / 30 / 60 / 90 / 180)
+    → fallback               rule-based regex if LLM confidence < 0.40
+      │
+      ▼
+ 2. Retrieve current state   DB-first (always when needs_current_state=true)
+    ├─ Active events          last 21 days, up to 8 events
+    ├─ Fresh claims           actively supported, up to 12
+    ├─ Stale claims           aging signal, up to 4
+    ├─ Latest AI snapshot     most recent daily briefing
+    └─ Global overview        long-term synthesis artifact
+      │
+      ▼
+ 3. Retrieve timeline         DB-first (when needs_timeline=true)
+    ├─ Timeline events        time-window events sorted oldest→newest, up to 12
+    ├─ Snapshot deltas        what changed between snapshots, up to 3
+    └─ Claim evolution        strengthened / weakened / superseded signals, up to 15
+      │
+      ▼
+ 4. Retrieve archive          DB-first (when needs_archive=true)
+    ├─ Superseded claims      replaced by newer findings, up to 6
+    ├─ Inactive claims        no recent support, up to 4
+    └─ Older snapshots        historical snapshots (excluding latest), up to 2
+      │
+      ▼
+ 5. Freshness resolution      label and format each section before LLM sees anything
+    ├─ Annotate each item     [FRESH] / [STALE · Nd ago] / [SUPERSEDED] / [INACTIVE]
+    ├─ Include date ranges    first_seen_at → last_seen_at per event
+    └─ Tag stability scores   confidence signal for how well-supported each event is
+      │
+      ▼
+ 6. Vector supplement         ChromaDB (only when DB data is thin: <2 events AND <2 claims)
+    ├─ Skipped if ≥5 nodes    structured DB already provided enough context
+    ├─ Scoped by intent       archive mode → snapshots+artifacts+claims
+    │                         timeline mode → snapshots+events+claims
+    │                         current mode  → events+claims
+    └─ Filters inactive       suppresses inactive/archived items unless archive mode
+      │
+      ▼
+ 7. Web search fallback       Tavily (only when both DB and vector return nothing)
+    └─ Last resort            real-time web results labeled [Live web search results]
+      │
+      ▼
+ 8. Compose context           assemble final prompt context string (max 6000 chars)
+    ├─ Topic preamble         "[Topic: <name>]"
+    ├─ Article context        if user clicked "Ask AI" on a card (max 800 chars)
+    ├─ === CURRENT STATE ===
+    ├─ === RECENT EVOLUTION ===
+    ├─ === HISTORICAL BACKGROUND ===
+    └─ [SUPPLEMENTAL — ...]  vector/web results, clearly labeled
+      │
+      ▼
+ 9. Stream LLM answer         temperature=0.5; SSE token-by-token to frontend
+    └─ Emit sources list      structured {id, title, url, type} for UI citation chips
+```
+
+### Intent Classification
+
+The intent classifier is the routing brain of the pipeline. It runs a small, fast LLM call at temperature=0 to decide which DB layers to query. The output is a structured JSON:
+
+```json
+{
+  "needs_current_state": true,
+  "needs_timeline": false,
+  "needs_archive": false,
+  "time_window_days": 14,
+  "reason": "user asking about current situation",
+  "confidence": 0.85
+}
+```
+
+If confidence < 0.40 or the LLM call fails, it falls back to a rule-based classifier using regex keyword matching (English and Chinese):
+
+- Timeline keywords: `evolv`, `trend`, `changed`, `over time`, `变化`, `演变`, …
+- Archive keywords: `history`, `origin`, `before`, `previous`, `历史`, `以前`, …
+
+### Why DB-First, Not Vector-First
+
+Most RAG systems query a vector store immediately. Domain Monitor inverts this for temporal accuracy:
+
+1. **Vector embeddings don't encode time** — a vector search for "current China trade policy" may return a high-similarity match from 18 months ago with no indication it's stale
+2. **SQLite knows exactly what is fresh** — claims have explicit `status` fields (fresh/stale/superseded) and validated timestamps; events have `first_seen_at` and `last_seen_at`
+3. **Vector search is used as a gap-filler** — only activated when structured retrieval returns fewer than 5 nodes total, ensuring it supplements rather than dominates the context
+
+---
+
+## Context Engineering
+
+The system does not simply dump raw documents into the prompt. Each layer of context goes through a deliberate formatting and labeling process before the LLM sees it.
+
+### Section Headers & Priority Anchors
+
+The assembled context uses named sections as explicit priority signals to the LLM:
+
+```
+=== CURRENT STATE ===          ← always answer from here first
+=== RECENT EVOLUTION ===       ← add when it enriches the answer
+=== HISTORICAL BACKGROUND ===  ← background only; never present as current fact
+[SUPPLEMENTAL — ...]           ← vector/web fill; clearly secondary
+```
+
+The system prompt instructs the LLM to follow this exact hierarchy, and to explicitly surface conflicts rather than silently preferring one source over another.
+
+### Freshness Labels
+
+Every retrieved item is annotated inline with its temporal status before formatting:
+
+```
+[FRESH]                  actively supported by recent evidence
+[STALE · 12d ago]        last signal 12 days ago; treat with caution
+[SUPERSEDED]             a newer claim replaced this one
+[INACTIVE · 45d ago]     no longer tracked; shown in archive only
+[ARCHIVED]               resolved or irrelevant
+```
+
+This means the LLM cannot accidentally cite a superseded claim as current fact — the label is physically present in the context window.
+
+### Event Date Ranges & Stability
+
+Active events are formatted with their observation window and stability score:
+
+```
+1. [2026-03-15 → 2026-03-31] China expands overseas investment quotas (stability: 0.87)
+   Summary text truncated to 240 chars...
+```
+
+The stability score (0–1) reflects how consistently the event has been covered across multiple source citations over time. High stability = well-confirmed; low stability = may be a single-source report.
+
+### Timeline Ordering
+
+When the timeline layer is activated, events are explicitly sorted **oldest → newest** before formatting. This forces the LLM to read history in chronological order, making trend and evolution questions significantly more accurate.
+
+### Claim Evolution Log
+
+The timeline layer also includes a claim evolution log — a chronological record of how individual claims have changed:
+
+```
+[Claim Evolution Signals]
+  1. [2026-03-10] strengthened — New trade data confirms Q1 export growth
+  2. [2026-03-18] weakened — PMI reading below expectations; growth narrative challenged
+  3. [2026-03-25] superseded — New policy announcement invalidates earlier export claim
+```
+
+This gives the LLM an explicit change-log rather than requiring it to infer change from static snapshots.
+
+### Snapshot Deltas
+
+Each AI snapshot includes a `change_summary` delta against the previous snapshot, formatted as:
+
+```
+[Snapshot Deltas — What Changed]
+  [2026-03-28] Regulatory tone shifted from restrictive to accommodative; 
+               two new QFII quota expansions announced. Previous concerns 
+               about capital outflow restrictions appear to have eased.
+```
+
+### Context Budget Management
+
+The final context string is hard-capped at **6,000 characters** to stay within model context windows without sacrificing quality. The budget allocation priority is:
+
+1. Topic preamble (topic name anchor)
+2. Article context (if user triggered from a specific card) — max 800 chars
+3. Current state section
+4. Timeline section
+5. Historical background section
+6. Supplemental (vector/web) — appended last, truncated first if over budget
+
+### Citation Protocol
+
+The system prompt explicitly instructs the LLM to use `[Source Title]` syntax for inline citations — wrapping the exact title of a source document in square brackets. The frontend detects these tokens and renders them as interactive citation chips. Rules enforced in the prompt:
+
+- Only wrap titles that appear verbatim in the provided context
+- Do not wrap generic section labels like `[Current Claims]` or `[CURRENT STATE]`
+- Do not invent titles
+- Respond in the same language as the user's question
+
+The frontend's citation renderer fuzzy-matches the LLM's `[Source Title]` tokens against the structured sources list (emitted as a separate SSE event) using normalized string comparison, then renders each match as either:
+- An **internal navigation chip** (event/snapshot/artifact) — navigates to the item in the Overview panel
+- An **external link chip** — opens the original article URL in a new tab
+- A **passive chip** — displays the label without a link (knowledge-base items without a direct URL)
+
+---
 
 ## Tech Stack
 
-| Layer     | Technology                                              |
-|-----------|---------------------------------------------------------|
-| Frontend  | Next.js 15, TailwindCSS v4, Zustand (persist), Framer Motion |
-| Backend   | Python FastAPI, APScheduler, Uvicorn                   |
-| AI        | OpenAI / LM Studio / DashScope (Qwen) — switchable via env |
-| Data      | NewsAPI · Google News RSS · RSS Feeds · Event Registry · Tavily |
-| Storage   | SQLite + ChromaDB (vector / RAG)                       |
-| Real-time | Server-Sent Events (SSE)                               |
+| Layer | Technology |
+|---|---|
+| **Frontend** | Next.js 15 (App Router), TailwindCSS v4, Zustand (persist), Framer Motion |
+| **Backend** | Python FastAPI, APScheduler, Uvicorn |
+| **AI / LLM** | OpenAI / Anthropic / LM Studio / DashScope (Qwen) — switchable via env |
+| **Data Sources** | NewsAPI · Google News RSS · RSS Feeds · Event Registry · Tavily |
+| **Storage** | SQLite (structured data + claim/event lifecycle) + ChromaDB (vector embeddings) |
+| **Real-time** | Server-Sent Events (SSE) — article push and streaming chat responses |
 
-## Project Structure
-
-```
-Domain_Monitor/
-├── .env.example              # Root-level env template (copy to backend/.env)
-├── README.md
-├── backend/
-│   ├── main.py               # FastAPI app, all API routes
-│   ├── config.py             # Pydantic settings (reads .env)
-│   ├── database.py           # SQLite schema + CRUD helpers
-│   ├── pipeline.py           # Multi-stage data pipeline orchestrator
-│   ├── relevance.py          # TF-IDF dedup + keyword relevance scoring
-│   ├── chatbot.py            # RAG chatbot (hybrid search + LLM streaming)
-│   ├── topic_summary.py      # AI Analysis & Global Overview generation
-│   ├── llm_client.py         # Unified LLM client (OpenAI-compat API)
-│   ├── vector_store.py       # ChromaDB wrapper (upsert / query)
-│   ├── scheduler.py          # APScheduler jobs (fetch + summary)
-│   ├── sse_manager.py        # Server-Sent Events broadcast
-│   ├── search_client.py      # Tavily search helper
-│   ├── requirements.txt
-│   ├── collectors/
-│   │   ├── newsapi_collector.py
-│   │   ├── googlenews_collector.py
-│   │   ├── rss_collector.py
-│   │   ├── eventregistry_collector.py
-│   │   └── tavily_collector.py
-│   └── data/
-│       ├── monitor.db        # SQLite database
-│       └── chroma/           # ChromaDB vector store
-└── frontend/
-    ├── src/
-    │   ├── app/
-    │   │   ├── page.tsx               # Homepage — topic cards
-    │   │   ├── layout.tsx             # Root layout + ToastContainer
-    │   │   └── topic/[id]/
-    │   │       └── page.tsx           # Topic detail — 3-column layout
-    │   ├── components/
-    │   │   ├── TopicCard.tsx          # Homepage topic card (inline rename/delete)
-    │   │   ├── TopicHeader.tsx        # Topic page header (Fetch Now, fetch status)
-    │   │   ├── ResearchBriefPanel.tsx # Left panel — AI research plan + CRUD
-    │   │   ├── EventFeed.tsx          # Middle panel — article/event list
-    │   │   ├── EventCard.tsx          # Event cluster card (right-click menu)
-    │   │   ├── NewsCard.tsx           # Single-article card
-    │   │   ├── ArticleContextMenu.tsx # Right-click portal menu
-    │   │   ├── AnalysisPanel.tsx      # Right panel — Realtime / Overview tabs
-    │   │   ├── ChatBot.tsx            # AI Assistant panel
-    │   │   └── ToastContainer.tsx     # Toast notifications
-    │   ├── lib/
-    │   │   ├── api.ts         # Typed API client (fetchWithRetry, streamChat, …)
-    │   │   ├── constants.ts   # Shared constants (colors, thresholds, timings)
-    │   │   └── utils.ts       # Helpers (effectiveImportance, timeAgo, parseTags)
-    │   └── stores/
-    │       └── useStore.ts    # Zustand store (persists chat history per topic)
-    └── package.json
-```
+---
 
 ## Quick Start
 
@@ -112,7 +470,6 @@ python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Configure environment
 cp ../.env.example .env
 # Edit .env with your API keys and LLM provider settings
 
@@ -136,7 +493,7 @@ Open [http://localhost:3000](http://localhost:3000)
 3. Click **Fetch Now** in the header to immediately pull articles, or wait for the scheduled interval (default: every 15 min)
 4. Browse the **Event feed** (middle column); right-click any article card for options: Pin for tracking / Archive / Delete / Change sentiment or importance
 5. Check the **Realtime** tab (right panel) for live AI Analysis and Alert Signals; switch to **Overview** for the Global Overview, historical AI snapshots, and Knowledge Base articles
-6. Click the chat icon (top right) to open the **AI Assistant** — this replaces the right panel while open; ask questions using RAG over stored articles, snapshots, and the Global Overview
+6. Click the chat icon (top right) to open the **AI Assistant** — ask questions about the domain; the system automatically decides which knowledge layers to use
 
 ---
 
@@ -191,71 +548,6 @@ Copy `.env.example` to `backend/.env` and fill in the values you need.
 | Variable | Description | Default |
 |---|---|---|
 | `NEXT_PUBLIC_API_BASE` | Backend API base URL | `http://localhost:8000` |
-
----
-
-## Article Lifecycle
-
-Articles progress through states managed via the right-click context menu:
-
-| State | Description |
-|---|---|
-| **Active** | Visible in the main event feed |
-| **Knowledge Base** | Important/bookmarked articles; appear in Overview → Core Articles |
-| **Archived** | Hidden from main feed; shown in a collapsible section at the bottom |
-| **Deleted** | Permanently removed from the database |
-
-Importance scores apply **time decay** (exponential) — articles older than ~7 days gradually lose importance for sorting/display, reflecting recency relevance.
-
----
-
-## AI Features
-
-### Research Brief
-Natural-language research direction → AI generates a structured plan including keywords, RSS feeds, research angles, key entities, and geographic/sector scope. All generated items are user-editable (CRUD).
-
-### Data Pipeline
-Multi-stage recall-then-precision pipeline:
-1. **Collect** — parallel fetching from NewsAPI, Google News RSS, user RSS feeds, Event Registry, Tavily
-2. **URL dedup** — normalize URLs and drop exact duplicates
-3. **Semantic dedup** — TF-IDF cosine similarity; keeps the most authoritative source per near-duplicate cluster
-4. **Relevance filter** — three-tier keyword matching (exact phrase → space-collapsed → any-word); configurable threshold
-5. **Event clustering** — group semantically similar articles into events
-6. **Canonical selection** — score each source by authority signals + coverage; pick the best representative
-7. **LLM enrichment** — batch call to generate summary, tags, sentiment, importance (1–10), and topic-specific analysis for canonical articles only
-
-### AI Analysis (Realtime Tab)
-LLM-generated narrative summary for the topic, cached and updated on demand or on schedule. Includes Notable Signals and Outlook sections.
-Time-window metrics in Signals are computed on article timeline time: `published_at` first, and fallback to `created_at` when publish time is missing.
-Long-form analysis now supports `cite` buttons for both article/event references:
-- article cite button -> opens original article URL
-- event cite button -> opens event canonical source URL
-- hover displays source title; no citation data gracefully falls back to plain markdown text
-
-### Global Overview (Overview Tab)
-Long-term macro analysis synthesized from historical AI snapshots. Covers domain evolution, key entities, persistent themes, and trend trajectory.
-Narrative evolution (event turnover + claim strengthening/weakening/superseding) is merged into existing overview/evolution text output, not a separate narrative panel.
-
-### AI Assistant (Chatbot)
-RAG-powered chat with:
-- **Article context** — clicking "Ask AI" on a card pre-loads that article's full metadata and content
-- **Vector search** — hybrid retrieval from ChromaDB (articles + snapshots) using the query + article title as the search key
-- **Global Overview injection** — macro analysis always injected into system prompt
-- **Multi-turn history** — last 8 messages passed to the LLM for conversational continuity
-- **Per-topic persistence** — chat history saved to `localStorage` per topic
-
----
-
-## Alert Signals
-
-The Realtime tab shows automated alert signals based on:
-
-| Signal | Threshold |
-|---|---|
-| High negative sentiment | ≥ 40% of recent articles are negative |
-| Elevated negative sentiment | ≥ 30% of recent articles are negative |
-| Volume surge | Current period articles ≥ 100% more than previous period |
-| High important article density | ≥ 40% of articles with importance score ≥ 8 |
 
 ---
 
@@ -318,7 +610,7 @@ The Realtime tab shows automated alert signals based on:
 | `GET` | `/api/topics/{id}/global-overview` | Get cached Global Overview content |
 | `GET` | `/api/topics/{id}/synthesis/global-overview` | Get Global Overview synthesis artifact |
 | `POST` | `/api/topics/{id}/synthesis/global-overview/generate` | Trigger Global Overview regeneration |
-| `GET` | `/api/topics/{id}/synthesis/global-overview/status` | Poll generation status (includes error/result fields) |
+| `GET` | `/api/topics/{id}/synthesis/global-overview/status` | Poll generation status |
 | `GET` | `/api/topics/{id}/synthesis/evolution-report` | Get Evolution synthesis artifact |
 | `POST` | `/api/topics/{id}/synthesis/evolution-report/generate` | Trigger Evolution report regeneration |
 | `GET` | `/api/topics/{id}/synthesis/evolution-report/status` | Poll Evolution generation status |
@@ -337,3 +629,63 @@ The Realtime tab shows automated alert signals based on:
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/chat` | Streaming AI chat — SSE response (`message`, `topic_id`, `article_context`, `history`) |
+
+### Project Structure
+
+```
+Domain_Monitor/
+├── .env.example
+├── README.md
+├── backend/
+│   ├── main.py               # FastAPI app, all API routes
+│   ├── config.py             # Pydantic settings (reads .env)
+│   ├── database.py           # SQLite schema + CRUD helpers
+│   ├── pipeline.py           # Multi-stage data pipeline orchestrator
+│   ├── relevance.py          # TF-IDF dedup + keyword relevance scoring
+│   ├── chatbot.py            # Multi-layer RAG chatbot (intent → DB → vector → LLM)
+│   ├── topic_summary.py      # AI Analysis, Global Overview, claim tracking
+│   ├── llm_client.py         # Unified LLM client (OpenAI-compat API)
+│   ├── vector_store.py       # ChromaDB wrapper (upsert / query)
+│   ├── scheduler.py          # APScheduler jobs (fetch + summary)
+│   ├── sse_manager.py        # Server-Sent Events broadcast
+│   ├── search_client.py      # Tavily search helper
+│   ├── requirements.txt
+│   ├── collectors/
+│   │   ├── newsapi_collector.py
+│   │   ├── googlenews_collector.py
+│   │   ├── rss_collector.py
+│   │   ├── eventregistry_collector.py
+│   │   └── tavily_collector.py
+│   └── data/
+│       ├── monitor.db        # SQLite database
+│       └── chroma/           # ChromaDB vector store
+└── frontend/
+    ├── src/
+    │   ├── app/
+    │   │   ├── page.tsx               # Homepage — topic cards
+    │   │   ├── layout.tsx             # Root layout + ToastContainer
+    │   │   └── topic/[id]/
+    │   │       └── page.tsx           # Topic detail — 3-column layout
+    │   ├── components/
+    │   │   ├── TopicCard.tsx
+    │   │   ├── TopicHeader.tsx
+    │   │   ├── ResearchBriefPanel.tsx
+    │   │   ├── EventFeed.tsx
+    │   │   ├── EventCard.tsx
+    │   │   ├── NewsCard.tsx
+    │   │   ├── ArticleContextMenu.tsx
+    │   │   ├── AnalysisPanel.tsx
+    │   │   ├── MacroAnalysisPanel.tsx
+    │   │   ├── ChatBot.tsx            # AI Assistant with RAG thinking bar
+    │   │   └── ToastContainer.tsx
+    │   ├── lib/
+    │   │   ├── api/
+    │   │   │   ├── index.ts
+    │   │   │   ├── chat.ts            # streamChat — SSE parser for chat events
+    │   │   │   └── types.ts           # ChatEvent, ChatTracePayload, ChatSource
+    │   │   ├── constants.ts
+    │   │   └── utils.ts
+    │   └── stores/
+    │       └── useStore.ts            # Zustand store (persists chat + UI state per topic)
+    └── package.json
+```

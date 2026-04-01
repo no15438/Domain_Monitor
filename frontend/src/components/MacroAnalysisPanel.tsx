@@ -466,6 +466,7 @@ export default function MacroAnalysisPanel({
               return (
                 <div
                   key={ev.id}
+                  data-knowledge-event-id={ev.id}
                   role="button"
                   tabIndex={0}
                   onClick={() => handleSelectEvent(ev)}

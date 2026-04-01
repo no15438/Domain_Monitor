@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { AnalysisCitation, Article, Keyword, Topic, EventCluster } from "@/lib/api";
+import type { AnalysisCitation, Article, Keyword, Topic, EventCluster, ChatTracePayload, ChatSource } from "@/lib/api";
 import {
   fetchGlobalOverview,
   fetchGlobalOverviewStatus,
@@ -133,6 +133,8 @@ interface AppState {
   keywords: Keyword[];
   /** Per-topic chat history keyed by String(topicId). Persisted to localStorage. */
   chatMessagesByTopic: Record<string, ChatMessage[]>;
+  chatTraceByTopic: Record<string, ChatTracePayload[]>;
+  chatSourcesByTopic: Record<string, ChatSource[]>;
   selectedArticle: Article | null;
   /** Native event chat context — preferred over selectedArticle for event cards. */
   selectedEventContext: EventChatContext | null;
@@ -170,6 +172,9 @@ interface AppState {
   addChatMessage: (msg: ChatMessage) => void;
   appendToLastAssistant: (chunk: string) => void;
   clearChat: () => void;
+  appendChatTrace: (topicId: number | null, trace: ChatTracePayload) => void;
+  clearChatTrace: (topicId: number | null) => void;
+  setChatSources: (topicId: number | null, sources: ChatSource[]) => void;
   addToast: (message: string, level?: Toast["level"]) => void;
   dismissToast: (id: string) => void;
   hydrateGlobalOverview: (topicId: number) => Promise<void>;
@@ -216,6 +221,8 @@ export const useStore = create<AppState>()(
   articles: [],
   keywords: [],
   chatMessagesByTopic: {},
+  chatTraceByTopic: {},
+  chatSourcesByTopic: {},
   selectedArticle: null,
   selectedEventContext: null,
   selectedKnowledgeEventId: null,
@@ -714,8 +721,36 @@ export const useStore = create<AppState>()(
       const key = String(s.activeTopicId ?? "null");
       return {
         chatMessagesByTopic: { ...s.chatMessagesByTopic, [key]: [] },
+        chatTraceByTopic: { ...s.chatTraceByTopic, [key]: [] },
+        chatSourcesByTopic: { ...s.chatSourcesByTopic, [key]: [] },
         selectedArticle: null,
       };
+    }),
+  appendChatTrace: (topicId: number | null, trace: ChatTracePayload) =>
+    set((s) => {
+      const key = String(topicId ?? "null");
+      const current = s.chatTraceByTopic[key] ?? [];
+      const updated = [...current];
+      const existingIdx = updated.findIndex((t) => t.kind === trace.kind);
+      if (existingIdx !== -1) {
+        updated[existingIdx] = trace;
+      } else {
+        updated.push(trace);
+      }
+      return { chatTraceByTopic: { ...s.chatTraceByTopic, [key]: updated } };
+    }),
+  clearChatTrace: (topicId: number | null) =>
+    set((s) => {
+      const key = String(topicId ?? "null");
+      return {
+        chatTraceByTopic: { ...s.chatTraceByTopic, [key]: [] },
+        chatSourcesByTopic: { ...s.chatSourcesByTopic, [key]: [] },
+      };
+    }),
+  setChatSources: (topicId: number | null, sources: ChatSource[]) =>
+    set((s) => {
+      const key = String(topicId ?? "null");
+      return { chatSourcesByTopic: { ...s.chatSourcesByTopic, [key]: sources } };
     }),
     }),
     {

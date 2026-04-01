@@ -103,9 +103,57 @@ export interface ResearchPlan {
   sector_scope: string[];
 }
 
+export interface ChatTraceNode {
+  id: string;
+  type: "event" | "claim" | "snapshot" | "artifact";
+  title: string;
+  status: string;
+}
+
+export type KbLayer = "current_state" | "timeline" | "archive";
+
+export interface ChatTraceMeta {
+  // intent
+  needs_current_state?: boolean;
+  needs_timeline?: boolean;
+  needs_archive?: boolean;
+  time_window_days?: number;
+  route_segments?: KbLayer[];
+  route_label?: string;
+  strategy_label?: string;
+  // kb_hits
+  retrieval_layers?: KbLayer[];
+  hit_counts?: Partial<Record<KbLayer, number>>;
+  total_nodes?: number;
+  // vector_supplement / web_fallback
+  used?: boolean;
+  // answer_generation
+  final_route_label?: string;
+  vec_used?: boolean;
+  web_used?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ChatTracePayload {
+  kind: "intent" | "kb_hits" | "vector_supplement" | "web_fallback" | "answer_generation";
+  label: string;
+  state: "running" | "done" | "skipped";
+  meta?: ChatTraceMeta;
+  nodes?: ChatTraceNode[];
+}
+
+export interface ChatSource {
+  id: string;
+  title: string;
+  url: string;
+  type: "event" | "snapshot" | "artifact" | "web" | string;
+}
+
 export type ChatEvent =
   | { type: "status"; value: string }
-  | { type: "content"; value: string };
+  | { type: "content"; value: string }
+  | { type: "trace"; value: ChatTracePayload }
+  | { type: "sources"; value: ChatSource[] };
 
 export interface ChatHistoryMessage {
   role: "user" | "assistant";

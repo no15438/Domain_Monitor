@@ -804,6 +804,7 @@ def _enrich_and_store(
                         "title": event_title,
                         "source": article["source"],
                         "url": article["url"],
+                        "first_seen_at": item.get("published_date") or item.get("published_at") or last_seen_at,
                         "last_seen_at": last_seen_at,
                         "novelty_score": str(item.get("_source_score", 0)),
                     },

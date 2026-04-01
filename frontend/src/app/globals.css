@@ -90,11 +90,20 @@ body {
   overflow-x: auto;
   margin-bottom: 0.5em;
 }
-.chat-markdown a {
+/* Default link style — cite chips use .chat-cite-link to opt out */
+.chat-markdown a:not(.chat-cite-link) {
   color: var(--accent-hover);
   text-decoration: underline;
   overflow-wrap: break-word;
   word-break: break-all;
+}
+
+.chat-markdown .chat-cite-link,
+.chat-markdown .chat-cite-link:visited {
+  color: inherit;
+  text-decoration: none;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .chat-markdown {
   overflow-wrap: break-word;

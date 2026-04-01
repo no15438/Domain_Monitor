@@ -42,6 +42,8 @@ export async function* streamChat(
           if (data.done) return;
           if (data.status) yield { type: "status", value: data.status };
           if (data.content) yield { type: "content", value: data.content };
+          if (data.trace) yield { type: "trace", value: data.trace };
+          if (data.sources) yield { type: "sources", value: data.sources };
         } catch {
           // Skip malformed frames.
         }

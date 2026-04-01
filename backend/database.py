@@ -750,6 +750,42 @@ def get_events_v2(topic_id: int, status: str | None = None, limit: int = 50):
     return [dict(r) for r in rows]
 
 
+def get_events_since(topic_id: int, days: int = 14, limit: int = 50) -> list[dict]:
+    """Return events whose last_seen_at is within the past `days` days.
+
+    Falls back to any active events when none are found in the window (so
+    callers always get *something* if active events exist at all).
+    """
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT * FROM events_v2
+           WHERE topic_id = ?
+             AND status = 'active'
+             AND last_seen_at >= datetime('now', ?)
+           ORDER BY last_seen_at DESC, created_at DESC
+           LIMIT ?""",
+        (topic_id, f"-{days} days", limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_fresh_claims(topic_id: int, limit: int = 30) -> list[dict]:
+    """Return claims that are actively fresh: status=active AND staleness_status=fresh."""
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT * FROM claims
+           WHERE topic_id = ?
+             AND status = 'active'
+             AND staleness_status = 'fresh'
+           ORDER BY last_validated_at DESC, created_at DESC
+           LIMIT ?""",
+        (topic_id, limit),
+    ).fetchall()
+    conn.close()
+    return [_serialize_claim_row(r) for r in rows]
+
+
 def get_event_by_id(event_id: str):
     conn = _conn()
     row = conn.execute("SELECT * FROM events_v2 WHERE id = ?", (event_id,)).fetchone()
