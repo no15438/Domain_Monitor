@@ -52,8 +52,12 @@ services:
     rootDir: frontend
     dockerfilePath: Dockerfile
     healthCheckPath: /
-    dockerCommand: /bin/sh -c "PORT=10000 HOSTNAME=0.0.0.0 node server.js"
+    dockerCommand: node server.js
     envVars:
+      - key: PORT
+        value: "10000"
+      - key: HOSTNAME
+        value: 0.0.0.0
       - key: INTERNAL_API_BASE
         value: https://domain-monitor-backend-no15438.onrender.com
       - key: NEXT_PUBLIC_API_BASE
