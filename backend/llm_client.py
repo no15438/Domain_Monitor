@@ -14,14 +14,21 @@ def _get_client():
 
     provider = settings.llm_provider
 
-    if provider in ("openai", "lmstudio", "dashscope"):
+    if provider in ("openai", "lmstudio", "openai_compat", "dashscope"):
         from openai import OpenAI
 
         if provider == "openai":
             _client = OpenAI(api_key=settings.openai_api_key)
         elif provider == "lmstudio":
             _client = OpenAI(
-                base_url=settings.lmstudio_base_url, api_key="lm-studio"
+                base_url=settings.lmstudio_base_url.rstrip("/"),
+                api_key=settings.lmstudio_api_key or "lm-studio",
+            )
+        elif provider == "openai_compat":
+            key = (settings.openai_compat_api_key or "").strip() or "lm-studio"
+            _client = OpenAI(
+                base_url=settings.openai_compat_base_url.rstrip("/"),
+                api_key=key,
             )
         else:  # dashscope
             _client = OpenAI(
@@ -44,6 +51,8 @@ def _model():
         return settings.anthropic_model
     if p == "lmstudio":
         return settings.lmstudio_model
+    if p == "openai_compat":
+        return settings.openai_compat_model
     if p == "dashscope":
         return settings.dashscope_model
     return "qwen-plus"
@@ -67,7 +76,7 @@ def llm_chat(
     client = _get_client()
     provider = settings.llm_provider
 
-    if provider in ("openai", "lmstudio", "dashscope"):
+    if provider in ("openai", "lmstudio", "openai_compat", "dashscope"):
         kwargs: dict = {"model": _model(), "messages": messages, "temperature": temperature}
         if response_format is not None:
             kwargs["response_format"] = response_format
@@ -125,7 +134,7 @@ def llm_chat_stream(messages: list[dict], temperature: float = 0.5):
         if buf and not inside_think:
             yield buf
 
-    if provider in ("openai", "lmstudio", "dashscope"):
+    if provider in ("openai", "lmstudio", "openai_compat", "dashscope"):
         stream = client.chat.completions.create(
             model=_model(), messages=messages, temperature=temperature, stream=True
         )

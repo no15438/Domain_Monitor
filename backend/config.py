@@ -3,7 +3,8 @@ from typing import Optional
 
 
 class Settings(BaseSettings):
-    llm_provider: str = "openai"  # "openai" | "anthropic" | "lmstudio" | "dashscope"
+    # "openai" | "anthropic" | "lmstudio" (本机) | "openai_compat" (第三方 OpenAI 兼容网关，如 ichonhui) | "dashscope"
+    llm_provider: str = "openai"
 
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-4o-mini"
@@ -13,6 +14,12 @@ class Settings(BaseSettings):
 
     lmstudio_base_url: str = "http://localhost:1234/v1"
     lmstudio_model: str = "local-model"
+    lmstudio_api_key: str = "lm-studio"
+
+    # 第三方 OpenAI 兼容 HTTP API（非 LM Studio）：如 https://llm.ichonhui.com/.../v1
+    openai_compat_base_url: str = ""
+    openai_compat_model: str = ""
+    openai_compat_api_key: str = ""
 
     # Alibaba Cloud DashScope (OpenAI-compatible)
     dashscope_api_key: Optional[str] = None
