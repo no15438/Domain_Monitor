@@ -577,6 +577,24 @@ Copy `backend/.env.example` to `backend/.env` and fill in the values you need.
 
 Default first-stage production path: run both containers on one Ubuntu host with Docker Compose, keep SQLite + ChromaDB in the Docker volume, and expose the frontend on port `3000`.
 
+### 0. Cloud checklist (do this in the cloud console first)
+
+- Create an **Ubuntu 22.04 or 24.04 LTS** VM (recommended: **2 vCPU / 4GB RAM / 40GB+** disk).
+- Security group / firewall: allow inbound **TCP 22** (SSH) and **TCP 3000** (frontend).
+- Do **not** expose **TCP 8000** publicly; the backend stays on the Docker network and is reached via the frontend `/api` proxy.
+- For a **private** GitHub repo: add a read-only **Deploy key**, or clone with **HTTPS + PAT** (rotate tokens carefully).
+
+### Optional: bootstrap script on the VM
+
+After cloning the repo on the server, run from the repository root:
+
+```bash
+chmod +x scripts/cloud-vm-bootstrap.sh
+./scripts/cloud-vm-bootstrap.sh
+```
+
+This installs Docker (if missing), copies `backend/.env.example` to `backend/.env` when needed, runs `docker compose up -d --build`, and prints basic smoke-check output. If Docker was just installed and you see permission errors, **log out and SSH back in**, then run the script again.
+
 ### 1. Prepare the server
 
 ```bash
