@@ -1,6 +1,15 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { AnalysisCitation, Article, Keyword, Topic, EventCluster, ChatTracePayload, ChatSource } from "@/lib/api";
+import type {
+  AnalysisCitation,
+  Article,
+  Keyword,
+  Topic,
+  EventCluster,
+  ChatTracePayload,
+  ChatSource,
+  WorkspacePane,
+} from "@/lib/api";
 import {
   fetchGlobalOverview,
   fetchGlobalOverviewStatus,
@@ -10,6 +19,8 @@ import {
   postLiveSummaryGenerate,
   fetchFetchStatus,
   fetchArticles,
+  fetchResearchPlanStatus,
+  postGenerateResearchPlan,
 } from "@/lib/api";
 
 export interface ChatMessage {
@@ -57,8 +68,16 @@ export interface EventFeedPrefs {
   showArchived: boolean;
 }
 
+export interface ResearchPlanTaskSlice {
+  isGenerating: boolean;
+  lastStatus?: string;
+  lastError?: string | null;
+  finishedAt?: string | null;
+}
+
 const globalOverviewPollers = new Map<number, ReturnType<typeof setInterval>>();
 const liveSummaryPollers = new Map<number, ReturnType<typeof setInterval>>();
+const researchPlanPollers = new Map<number, ReturnType<typeof setInterval>>();
 // key = String(topicId ?? "null")
 const fetchPollers = new Map<string, ReturnType<typeof setInterval>>();
 const taskNotifications = new Map<string, string>();
@@ -76,6 +95,14 @@ function stopLiveSummaryPoll(topicId: number) {
   if (id !== undefined) {
     clearInterval(id);
     liveSummaryPollers.delete(topicId);
+  }
+}
+
+function stopResearchPlanPoll(topicId: number) {
+  const id = researchPlanPollers.get(topicId);
+  if (id !== undefined) {
+    clearInterval(id);
+    researchPlanPollers.delete(topicId);
   }
 }
 
@@ -153,7 +180,10 @@ interface AppState {
   analysisTabByTopic: Record<number, "realtime" | "overview">;
   analysisWindowByTopic: Record<number, "24h" | "7d">;
   briefCollapsedByTopic: Record<number, boolean>;
+  mobilePaneByTopic: Record<number, WorkspacePane>;
   eventFeedPrefsByTopic: Record<number, EventFeedPrefs>;
+  researchPlanDraftByTopic: Record<number, string>;
+  researchPlanByTopic: Record<number, ResearchPlanTaskSlice>;
   toasts: Toast[];
 
   setTopics: (t: Topic[]) => void;
@@ -192,7 +222,12 @@ interface AppState {
   setAnalysisTab: (topicId: number, tab: "realtime" | "overview") => void;
   setAnalysisWindow: (topicId: number, window: "24h" | "7d") => void;
   setBriefCollapsed: (topicId: number, collapsed: boolean) => void;
+  setMobilePane: (topicId: number, pane: WorkspacePane) => void;
   setEventFeedPrefs: (topicId: number, patch: Partial<EventFeedPrefs>) => void;
+  setResearchPlanDraft: (topicId: number, prompt: string) => void;
+  hydrateResearchPlanStatus: (topicId: number) => Promise<void>;
+  startResearchPlanGeneration: (topicId: number, prompt: string) => Promise<void>;
+  ensureResearchPlanPoll: (topicId: number) => void;
 }
 
 function defaultActionState(): ActionState {
@@ -238,7 +273,10 @@ export const useStore = create<AppState>()(
   analysisTabByTopic: {},
   analysisWindowByTopic: {},
   briefCollapsedByTopic: {},
+  mobilePaneByTopic: {},
   eventFeedPrefsByTopic: {},
+  researchPlanDraftByTopic: {},
+  researchPlanByTopic: {},
   toasts: [],
 
   addToast: (message, level = "error") => {
@@ -291,11 +329,20 @@ export const useStore = create<AppState>()(
     set((s) => ({ analysisWindowByTopic: { ...s.analysisWindowByTopic, [topicId]: window } })),
   setBriefCollapsed: (topicId, collapsed) =>
     set((s) => ({ briefCollapsedByTopic: { ...s.briefCollapsedByTopic, [topicId]: collapsed } })),
+  setMobilePane: (topicId, pane) =>
+    set((s) => ({ mobilePaneByTopic: { ...s.mobilePaneByTopic, [topicId]: pane } })),
   setEventFeedPrefs: (topicId, patch) =>
     set((s) => ({
       eventFeedPrefsByTopic: {
         ...s.eventFeedPrefsByTopic,
         [topicId]: { ...(s.eventFeedPrefsByTopic[topicId] ?? defaultEventFeedPrefs()), ...patch },
+      },
+    })),
+  setResearchPlanDraft: (topicId, prompt) =>
+    set((s) => ({
+      researchPlanDraftByTopic: {
+        ...s.researchPlanDraftByTopic,
+        [topicId]: prompt,
       },
     })),
 
@@ -452,6 +499,147 @@ export const useStore = create<AppState>()(
     }
 
     get().ensureLiveSummaryPoll(topicId);
+  },
+
+  ensureResearchPlanPoll: (topicId: number) => {
+    if (researchPlanPollers.has(topicId)) return;
+
+    const tick = async () => {
+      try {
+        const prevGenerating = get().researchPlanByTopic[topicId]?.isGenerating ?? false;
+        const st = await fetchResearchPlanStatus(topicId);
+        set((s) => ({
+          researchPlanByTopic: {
+            ...s.researchPlanByTopic,
+            [topicId]: {
+              isGenerating: st.generating,
+              lastStatus: st.status,
+              lastError: st.error ?? null,
+              finishedAt: st.finished_at ?? null,
+            },
+          },
+        }));
+        if (prevGenerating && !st.generating) {
+          get().endAction(
+            `task:research-plan:${topicId}`,
+            st.status === "error" ? "error" : "success",
+            st.error ?? null,
+            st.result_summary ?? null,
+          );
+          notifyTaskOutcome(
+            `research-plan-${topicId}`,
+            st.status,
+            st.error,
+            st.result_summary,
+            get().addToast,
+          );
+        }
+        if (!st.generating) {
+          stopResearchPlanPoll(topicId);
+        }
+      } catch {
+        stopResearchPlanPoll(topicId);
+        set((s) => ({
+          researchPlanByTopic: {
+            ...s.researchPlanByTopic,
+            [topicId]: {
+              isGenerating: false,
+              lastStatus: "error",
+              lastError: "Failed to poll AI research setup status",
+              finishedAt: s.researchPlanByTopic[topicId]?.finishedAt ?? null,
+            },
+          },
+        }));
+      }
+    };
+
+    void tick();
+    const intervalId = setInterval(() => void tick(), 2000);
+    researchPlanPollers.set(topicId, intervalId);
+  },
+
+  hydrateResearchPlanStatus: async (topicId: number) => {
+    try {
+      const st = await fetchResearchPlanStatus(topicId);
+      set((s) => ({
+        researchPlanByTopic: {
+          ...s.researchPlanByTopic,
+          [topicId]: {
+            isGenerating: st.generating,
+            lastStatus: st.status,
+            lastError: st.error ?? null,
+            finishedAt: st.finished_at ?? null,
+          },
+        },
+      }));
+      if (st.generating) {
+        const current = get().getActionState(`task:research-plan:${topicId}`);
+        if (current.status !== "running") get().beginAction(`task:research-plan:${topicId}`);
+        get().ensureResearchPlanPoll(topicId);
+      } else {
+        get().endAction(
+          `task:research-plan:${topicId}`,
+          st.status === "error" ? "error" : "success",
+          st.error ?? null,
+          st.result_summary ?? null,
+        );
+      }
+    } catch (e) {
+      if (e instanceof Error && e.name !== "AbortError") {
+        get().addToast("Failed to load AI research setup status", "warn");
+      }
+    }
+  },
+
+  startResearchPlanGeneration: async (topicId: number, prompt: string) => {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt) return;
+    const current = get().researchPlanByTopic[topicId];
+    if (current?.isGenerating) {
+      get().ensureResearchPlanPoll(topicId);
+      return;
+    }
+
+    get().beginAction(`task:research-plan:${topicId}`);
+    set((s) => ({
+      researchPlanDraftByTopic: {
+        ...s.researchPlanDraftByTopic,
+        [topicId]: trimmedPrompt,
+      },
+      researchPlanByTopic: {
+        ...s.researchPlanByTopic,
+        [topicId]: {
+          isGenerating: true,
+          lastStatus: "running",
+          lastError: null,
+          finishedAt: null,
+        },
+      },
+    }));
+
+    try {
+      const resp = await postGenerateResearchPlan(topicId, trimmedPrompt);
+      if (resp?.already_running || resp?.started) {
+        get().ensureResearchPlanPoll(topicId);
+        return;
+      }
+    } catch {
+      get().endAction(`task:research-plan:${topicId}`, "error", "Failed to start AI research setup");
+      set((s) => ({
+        researchPlanByTopic: {
+          ...s.researchPlanByTopic,
+          [topicId]: {
+            ...s.researchPlanByTopic[topicId],
+            isGenerating: false,
+            lastStatus: "error",
+            lastError: "Failed to start AI research setup",
+          },
+        },
+      }));
+      return;
+    }
+
+    get().ensureResearchPlanPoll(topicId);
   },
 
   ensureGlobalOverviewPoll: (topicId: number) => {
@@ -680,6 +868,7 @@ export const useStore = create<AppState>()(
     if (prev != null && prev !== id) {
       stopGlobalOverviewPoll(prev);
       stopLiveSummaryPoll(prev);
+      stopResearchPlanPoll(prev);
       stopFetchPoll(String(prev));
     }
     set({ activeTopicId: id, highlightedEventId: null, selectedKnowledgeEventId: null, selectedKnowledgeEventTitle: null });
@@ -697,7 +886,18 @@ export const useStore = create<AppState>()(
   setSelectedKnowledgeEvent: (id, title = null) => set({ selectedKnowledgeEventId: id, selectedKnowledgeEventTitle: id ? (title ?? null) : null }),
   setFetchingTopic: (id) => set({ fetchingTopicId: id }),
   setChatLoading: (v) => set({ isChatLoading: v }),
-  setChatOpen: (v) => set({ chatOpen: v }),
+  setChatOpen: (v) =>
+    set((s) => {
+      if (s.activeTopicId == null) return { chatOpen: v };
+      const currentPane = s.mobilePaneByTopic[s.activeTopicId] ?? "feed";
+      return {
+        chatOpen: v,
+        mobilePaneByTopic: {
+          ...s.mobilePaneByTopic,
+          [s.activeTopicId]: v ? "chat" : currentPane === "chat" ? "analysis" : currentPane,
+        },
+      };
+    }),
   setHighlightedEventId: (id) => set({ highlightedEventId: id }),
   refreshInsights: () => set((s) => ({ insightRefreshKey: s.insightRefreshKey + 1 })),
   addChatMessage: (msg) =>
@@ -760,7 +960,9 @@ export const useStore = create<AppState>()(
         analysisTabByTopic: state.analysisTabByTopic,
         analysisWindowByTopic: state.analysisWindowByTopic,
         briefCollapsedByTopic: state.briefCollapsedByTopic,
+        mobilePaneByTopic: state.mobilePaneByTopic,
         eventFeedPrefsByTopic: state.eventFeedPrefsByTopic,
+        researchPlanDraftByTopic: state.researchPlanDraftByTopic,
         // Reset transient states on hydration: "running" tasks never completed (process
         // was killed) and "error" states from a previous session reflect stale backend
         // errors (e.g. ChromaDB crash) that may no longer be valid.

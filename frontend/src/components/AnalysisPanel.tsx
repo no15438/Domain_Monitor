@@ -45,7 +45,11 @@ const EMPTY_INSIGHT: TopicInsight = {
 };
 
 
-export default function AnalysisPanel() {
+export default function AnalysisPanel({
+  layout = "desktop",
+}: {
+  layout?: "desktop" | "mobile";
+}) {
   const activeTopicId = useStore((s) => s.activeTopicId);
   const refreshKey = useStore((s) => s.insightRefreshKey);
   const hydrateLiveSummary = useStore((s) => s.hydrateLiveSummary);
@@ -63,6 +67,7 @@ export default function AnalysisPanel() {
   const aiGeneratedAt = liveSlice?.generatedAt ?? null;
   const aiCitations = liveSlice?.citations ?? [];
   const isGenerating = liveSlice?.isGenerating ?? false;
+  const isMobile = layout === "mobile";
 
   const activeTab = activeTopicId != null ? (analysisTabByTopic[activeTopicId] ?? "realtime") : "realtime";
   const window = activeTopicId != null ? (analysisWindowByTopic[activeTopicId] ?? "24h") : "24h";
@@ -284,7 +289,13 @@ export default function AnalysisPanel() {
   );
 
   return (
-    <div className="flex-4 min-w-[320px] bg-surface border-l border-border overflow-y-auto flex flex-col relative">
+    <div
+      className={`bg-surface overflow-y-auto flex flex-col relative ${
+        isMobile
+          ? "h-full min-h-0 w-full"
+          : "flex-4 min-w-[320px] border-l border-border"
+      }`}
+    >
       <div className="p-4 space-y-4 flex-1">
         <div className="rounded-lg border border-border p-1 bg-surface shadow-sm">
           <div className="grid grid-cols-2 gap-1">

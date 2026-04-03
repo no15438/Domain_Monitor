@@ -7,6 +7,7 @@ import {
   Sparkles,
   Shield,
   Bookmark,
+  Ellipsis,
 } from "lucide-react";
 import { type Article } from "@/lib/api";
 import { useStore } from "@/stores/useStore";
@@ -180,6 +181,16 @@ export default function NewsCard({
         <span className="ml-auto text-[10px] text-muted">
           {article.source || "web"}
         </span>
+        <button
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setCtxMenu({ x: rect.right - 180, y: rect.bottom + 8 });
+          }}
+          className="inline-flex items-center justify-center rounded-md p-1 text-muted hover:bg-surface-hover hover:text-foreground transition-colors md:hidden"
+          aria-label="Open article actions"
+        >
+          <Ellipsis className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       {/* Context menu */}

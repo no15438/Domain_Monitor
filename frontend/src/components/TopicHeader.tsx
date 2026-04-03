@@ -114,7 +114,7 @@ export default function TopicHeader({
   }
 
   return (
-    <header className="flex items-center gap-3 px-5 py-2.5 border-b border-border bg-surface/80 backdrop-blur-sm">
+    <header className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:gap-3 sm:px-5 border-b border-border bg-surface/80 backdrop-blur-sm">
       <Link
         href="/"
         aria-label="Back to topics"
@@ -127,16 +127,17 @@ export default function TopicHeader({
         className="w-3 h-3 rounded-full shrink-0"
         style={{ backgroundColor: topicColor }}
       />
-      <div>
-        <h1 className="text-base font-semibold tracking-tight">{topicName}</h1>
-        <p className="text-[11px] text-muted">Topic workspace</p>
+      <div className="min-w-0 flex-1">
+        <h1 className="truncate text-sm font-semibold tracking-tight sm:text-base">{topicName}</h1>
+        <p className="hidden text-[11px] text-muted sm:block">Topic workspace</p>
       </div>
 
-      <div className="flex-1" />
-
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
         {!isFetching && lastFetchedLabel && (
-          <span className="text-[11px] text-muted" title="The time the latest news articles were fetched for this topic">
+          <span
+            className="hidden text-[11px] text-muted sm:inline"
+            title="The time the latest news articles were fetched for this topic"
+          >
             News fetched {lastFetchedLabel}
           </span>
         )}
@@ -144,10 +145,11 @@ export default function TopicHeader({
           onClick={handleFetch}
           disabled={isFetching}
           aria-label={isFetching ? "Fetching in progress" : "Fetch latest news now"}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50 transition-colors"
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-accent text-white hover:bg-accent-hover disabled:opacity-50 transition-colors sm:gap-1.5 sm:px-3"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? "animate-spin" : ""}`} aria-hidden="true" />
-          {isFetching ? "Fetching…" : "Fetch Now"}
+          <span className="hidden sm:inline">{isFetching ? "Fetching…" : "Fetch Now"}</span>
+          <span className="sm:hidden">{isFetching ? "..." : "Fetch"}</span>
         </button>
       </div>
 
@@ -164,7 +166,7 @@ export default function TopicHeader({
         <MessageSquare className="w-4 h-4" aria-hidden="true" />
       </button>
 
-      <div className="w-px h-6 bg-border mx-1" />
+      <div className="mx-0.5 hidden h-6 w-px bg-border sm:mx-1 sm:block" />
       <ThemeToggle />
     </header>
   );

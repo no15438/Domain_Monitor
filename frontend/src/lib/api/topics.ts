@@ -1,7 +1,7 @@
 import { BASE, fetchWithRetry, safeJson } from "./shared";
 import type {
   ResearchConfig,
-  ResearchPlan,
+  ResearchPlanTaskStatus,
   Topic,
   TopicOverview,
   TopicFeed,
@@ -123,16 +123,37 @@ export async function updateResearchConfig(
   return safeJson(res, { status: "error" });
 }
 
-export async function generateResearchPlan(
+export async function postGenerateResearchPlan(
   topicId: number,
   prompt: string,
-): Promise<{ status: string; plan?: ResearchPlan; message?: string }> {
+): Promise<{ started: boolean; already_running?: boolean }> {
   const res = await fetchWithRetry(`${BASE}/api/topics/${topicId}/generate-research-plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ prompt }),
   });
-  return safeJson(res, { status: "error", message: "Network error" });
+  return safeJson(res, { started: false });
+}
+
+export async function fetchResearchPlanStatus(
+  topicId: number,
+): Promise<ResearchPlanTaskStatus> {
+  const res = await fetchWithRetry(
+    `${BASE}/api/topics/${topicId}/generate-research-plan/status?ts=${Date.now()}`,
+    { cache: "no-store" },
+  );
+  return safeJson(
+    res,
+    {
+      generating: false,
+      status: "idle",
+      error: null,
+      result_summary: null,
+      finished_at: null,
+    },
+    undefined,
+    { silent: true },
+  );
 }
 
 export async function fetchTopicFeeds(
