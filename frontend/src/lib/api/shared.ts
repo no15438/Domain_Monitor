@@ -1,7 +1,7 @@
-const BASE =
-  typeof window !== "undefined" && process.env.NEXT_PUBLIC_API_BASE
-    ? process.env.NEXT_PUBLIC_API_BASE
-    : "http://localhost:8000";
+const explicitBase = process.env.NEXT_PUBLIC_API_BASE?.trim()?.replace(/\/$/, "") || "";
+
+// Default to same-origin so Next.js rewrites can proxy API calls in Docker and on a VM.
+const BASE = explicitBase || "";
 
 const DEV = process.env.NODE_ENV === "development";
 

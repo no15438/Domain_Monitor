@@ -451,7 +451,7 @@ The frontend's citation renderer fuzzy-matches the LLM's `[Source Title]` tokens
 
 | Layer | Technology |
 |---|---|
-| **Frontend** | Next.js 15 (App Router), TailwindCSS v4, Zustand (persist), Framer Motion |
+| **Frontend** | Next.js 16 (App Router), TailwindCSS v4, Zustand (persist), Framer Motion |
 | **Backend** | Python FastAPI, APScheduler, Uvicorn |
 | **AI / LLM** | OpenAI / Anthropic / LM Studio / DashScope (Qwen) — switchable via env |
 | **Data Sources** | NewsAPI · Google News RSS · RSS Feeds · Event Registry · Tavily |
@@ -486,7 +486,22 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000)
 
-### 3. Usage
+### 3. Docker Compose
+
+```bash
+cp backend/.env.example backend/.env
+# Edit backend/.env with your API keys and LLM provider settings
+
+docker compose up --build
+```
+
+Open [http://localhost:3000](http://localhost:3000)
+
+- The frontend proxies `/api/*` to the backend container automatically
+- SQLite and ChromaDB data persist in the named Docker volume `backend_data`
+- You usually do not need `NEXT_PUBLIC_API_BASE` for Docker or single-VM deployment
+
+### 4. Usage
 
 1. **Create a topic** on the homepage (e.g., "AI in Healthcare")
 2. Go to the topic page; in the **Research Brief** panel (left), describe your research direction and click **Generate** — AI creates keywords, RSS feeds, research angles, key entities, and geographic/sector scope
@@ -499,7 +514,9 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ## Environment Variables
 
-Copy `.env.example` to `backend/.env` and fill in the values you need.
+Copy `backend/.env.example` to `backend/.env` and fill in the values you need.
+
+`frontend/.env.example` documents optional public frontend variables. For Docker Compose and single-VM deployment, you can usually leave frontend variables unset and let Next.js proxy `/api/*` to the backend internally.
 
 ### LLM Provider
 
@@ -544,14 +561,70 @@ Copy `.env.example` to `backend/.env` and fill in the values you need.
 |---|---|---|
 | `DATABASE_PATH` | SQLite database path | `./data/monitor.db` |
 | `CHROMA_PERSIST_DIR` | ChromaDB persistence directory | `./data/chroma` |
-| `CORS_ORIGINS` | Comma-separated allowed CORS origins | `http://localhost:3000` |
+| `CORS_ORIGINS` | Comma-separated allowed browser origins for direct API access | `http://localhost:3000` |
 | `LOG_LEVEL` | Logging level (`DEBUG`/`INFO`/`WARNING`/`ERROR`) | `INFO` |
 
 ### Frontend
 
 | Variable | Description | Default |
 |---|---|---|
-| `NEXT_PUBLIC_API_BASE` | Backend API base URL | `http://localhost:8000` |
+| `NEXT_PUBLIC_API_BASE` | Optional public backend API base URL; leave unset to use same-origin `/api` proxy | same-origin `/api` |
+| `INTERNAL_API_BASE` | Docker build-time backend URL used by Next.js rewrites | `http://backend:8000` in Compose |
+
+---
+
+## Ubuntu VM Deployment
+
+Default first-stage production path: run both containers on one Ubuntu host with Docker Compose, keep SQLite + ChromaDB in the Docker volume, and expose the frontend on port `3000`.
+
+### 1. Prepare the server
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker "$USER"
+```
+
+Reconnect to the server after the group change, then clone the repo.
+
+### 2. Configure the app
+
+```bash
+git clone <your-repo-url>
+cd Domain_Monitor
+cp backend/.env.example backend/.env
+```
+
+Edit `backend/.env` with your real API keys and provider settings.
+
+### 3. Start the stack
+
+```bash
+docker compose up -d --build
+```
+
+### 4. Verify
+
+```bash
+docker compose ps
+docker compose logs -f backend
+docker compose logs -f frontend
+```
+
+Then open `http://YOUR_SERVER_IP:3000`.
+
+### 5. Persisted data
+
+- SQLite database is stored in the Docker volume mounted at `/app/data/monitor.db`
+- ChromaDB persistence directory is mounted at `/app/data/chroma`
+- Recreating containers does not delete data unless you remove the `backend_data` volume
+
+### 6. Optional hardening
+
+- Put Nginx or Caddy in front of the frontend container for ports `80/443`
+- Add HTTPS with Let's Encrypt before exposing the service publicly
+- If you do not need direct API access, keep port `8000` internal-only as in the provided Compose file
 
 ---
 
