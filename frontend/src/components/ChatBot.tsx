@@ -515,7 +515,11 @@ function ThinkingBar({
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ChatBot() {
+export default function ChatBot({
+  layout = "desktop",
+}: {
+  layout?: "desktop" | "mobile";
+}) {
   const {
     chatMessagesByTopic,
     chatTraceByTopic,
@@ -540,6 +544,7 @@ export default function ChatBot() {
   const chatMessages = chatMessagesByTopic[String(activeTopicId ?? "null")] ?? [];
   const chatTraces = chatTraceByTopic?.[String(activeTopicId ?? "null")] ?? [];
   const chatSources = chatSourcesByTopic?.[String(activeTopicId ?? "null")] ?? [];
+  const isMobile = layout === "mobile";
 
   const [input, setInput] = useState("");
   const [chatStatus, setChatStatus] = useState<string | null>(null);
@@ -654,7 +659,13 @@ export default function ChatBot() {
   })();
 
   return (
-    <div className="flex-4 min-w-[320px] flex flex-col border-l border-border bg-surface shadow-sm overflow-hidden">
+    <div
+      className={`flex flex-col bg-surface shadow-sm overflow-hidden ${
+        isMobile
+          ? "h-full min-h-0 w-full"
+          : "flex-4 min-w-[320px] border-l border-border"
+      }`}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-2">

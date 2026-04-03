@@ -224,16 +224,18 @@ export default function ArticleContextMenu({
     }
   };
 
+  const isMobileViewport = typeof window !== "undefined" && window.innerWidth < 640;
+
   return createPortal(
     <>
       {/* invisible overlay to block interactions */}
-      <div className="fixed inset-0 z-9998" />
+      <div className="fixed inset-0 z-9998" onClick={onClose} />
       <div
         ref={menuRef}
         role="menu"
         aria-label="Article actions"
-        style={{ left: pos.x, top: pos.y }}
-        className="fixed z-9999 w-56 py-1 rounded-xl border border-border bg-surface/95 backdrop-blur-lg shadow-2xl text-xs select-none"
+        style={isMobileViewport ? { left: 12, right: 12, bottom: 12 } : { left: pos.x, top: pos.y }}
+        className="fixed z-9999 w-[calc(100vw-1.5rem)] max-w-none py-1 rounded-xl border border-border bg-surface/95 backdrop-blur-lg shadow-2xl text-xs select-none sm:w-56"
       >
         {/* Sentiment */}
         <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-wider text-muted font-semibold">

@@ -152,6 +152,82 @@ async def _run_live_summary_background(topic_id: int, hours: int):
         _bg_finish(key, error=str(e))
 
 
+def _generate_research_plan_sync(topic_id: int, prompt: str) -> None:
+    import re as _re
+    from llm_client import llm_chat
+
+    system_msg = (
+        "You are an expert research analyst helping set up a comprehensive news/intelligence monitoring system.\n"
+        "Given a user's research question or topic description, generate a COMPLETE research plan.\n"
+        "Return ONLY a valid JSON object (no markdown fences, no explanation) with these fields:\n"
+        "{\n"
+        '  "research_brief": "A refined 2-4 sentence research direction description",\n'
+        '  "keywords": ["keyword1", "keyword2", ...],  // 8-15 monitoring keywords/phrases\n'
+        '  "rss_feeds": [{"url": "...", "label": "..."}],  // 3-8 real, well-known RSS feed URLs relevant to the topic\n'
+        '  "angles": ["Research angle 1", "Research angle 2", ...],  // 4-8 specific research questions/angles\n'
+        '  "entities": ["Entity1", "Entity2", ...],  // 5-15 key entities (people, companies, orgs, countries)\n'
+        '  "geographic_scope": ["Region1", "Region2", ...],  // relevant regions\n'
+        '  "sector_scope": ["Sector1", "Sector2", ...]  // relevant industries/sectors\n'
+        "}\n"
+        "IMPORTANT:\n"
+        "- Use the SAME LANGUAGE as the user's prompt for all text fields\n"
+        "- RSS feeds must be real, publicly accessible URLs from major news outlets, specialized journals, or Google News RSS\n"
+        "- For Google News RSS, format as: https://news.google.com/rss/search?q=QUERY&hl=LANG\n"
+        "- Keywords should be concise but precise enough for news search\n"
+        "- Angles should be specific, actionable research questions"
+    )
+
+    result = llm_chat(
+        [
+            {"role": "system", "content": system_msg},
+            {"role": "user", "content": prompt},
+        ],
+        0.4,
+    )
+
+    match = _re.search(r"\{[\s\S]*\}", result)
+    if not match:
+        raise ValueError("Failed to parse LLM response")
+
+    try:
+        plan = json.loads(match.group())
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid JSON from LLM") from exc
+
+    brief = plan.get("research_brief", prompt)
+    kw_list = plan.get("keywords", [])
+    feed_list = plan.get("rss_feeds", [])
+    config = {
+        "angles": plan.get("angles", []),
+        "entities": plan.get("entities", []),
+        "geographic_scope": plan.get("geographic_scope", []),
+        "sector_scope": plan.get("sector_scope", []),
+    }
+
+    update_topic(topic_id, None, None, brief, json.dumps(config, ensure_ascii=False))
+
+    for kw in kw_list:
+        kw_str = str(kw).strip()
+        if kw_str:
+            add_keyword(kw_str, "", topic_id)
+
+    for feed in feed_list:
+        url = feed.get("url", "") if isinstance(feed, dict) else str(feed)
+        label = feed.get("label", "") if isinstance(feed, dict) else ""
+        if url.strip():
+            add_topic_feed(topic_id, url.strip(), label)
+
+
+async def _run_research_plan_background(topic_id: int, prompt: str):
+    key = f"research-plan-{topic_id}"
+    try:
+        await asyncio.to_thread(_generate_research_plan_sync, topic_id, prompt)
+        _bg_finish(key, result=f"generated research setup for topic {topic_id}")
+    except Exception as e:
+        log.error("research-plan error for topic %d: %s", topic_id, e)
+        _bg_finish(key, error=str(e))
+
+
 async def _run_evolution_report_background(topic_id: int):
     key = f"evolution-{topic_id}"
     try:
@@ -285,88 +361,24 @@ class GenerateResearchPlanReq(BaseModel):
 
 @app.post("/api/topics/{topic_id}/generate-research-plan")
 async def api_generate_research_plan(topic_id: int, req: GenerateResearchPlanReq):
-    """AI generates a full research plan from a natural-language prompt.
+    """Start research setup generation in a background task."""
+    await _require_topic(topic_id)
+    key = f"research-plan-{topic_id}"
+    if not _bg_try_start(key):
+        return {"started": False, "already_running": True}
+    asyncio.create_task(_run_research_plan_background(topic_id, req.prompt))
+    return {"started": True, "already_running": False}
 
-    Returns and persists: refined brief, keywords, RSS feeds, angles, entities, scope.
-    """
-    import re as _re
-    from llm_client import llm_chat
 
-    system_msg = (
-        "You are an expert research analyst helping set up a comprehensive news/intelligence monitoring system.\n"
-        "Given a user's research question or topic description, generate a COMPLETE research plan.\n"
-        "Return ONLY a valid JSON object (no markdown fences, no explanation) with these fields:\n"
-        "{\n"
-        '  "research_brief": "A refined 2-4 sentence research direction description",\n'
-        '  "keywords": ["keyword1", "keyword2", ...],  // 8-15 monitoring keywords/phrases\n'
-        '  "rss_feeds": [{"url": "...", "label": "..."}],  // 3-8 real, well-known RSS feed URLs relevant to the topic\n'
-        '  "angles": ["Research angle 1", "Research angle 2", ...],  // 4-8 specific research questions/angles\n'
-        '  "entities": ["Entity1", "Entity2", ...],  // 5-15 key entities (people, companies, orgs, countries)\n'
-        '  "geographic_scope": ["Region1", "Region2", ...],  // relevant regions\n'
-        '  "sector_scope": ["Sector1", "Sector2", ...]  // relevant industries/sectors\n'
-        "}\n"
-        "IMPORTANT:\n"
-        "- Use the SAME LANGUAGE as the user's prompt for all text fields\n"
-        "- RSS feeds must be real, publicly accessible URLs from major news outlets, specialized journals, or Google News RSS\n"
-        "- For Google News RSS, format as: https://news.google.com/rss/search?q=QUERY&hl=LANG\n"
-        "- Keywords should be concise but precise enough for news search\n"
-        "- Angles should be specific, actionable research questions"
-    )
-
-    result = await asyncio.to_thread(
-        llm_chat,
-        [
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": req.prompt},
-        ],
-        0.4,
-    )
-
-    match = _re.search(r"\{[\s\S]*\}", result)
-    if not match:
-        raise HTTPException(status_code=502, detail="Failed to parse LLM response")
-
-    try:
-        plan = json.loads(match.group())
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=502, detail="Invalid JSON from LLM")
-
-    brief = plan.get("research_brief", req.prompt)
-    kw_list = plan.get("keywords", [])
-    feed_list = plan.get("rss_feeds", [])
-    config = {
-        "angles": plan.get("angles", []),
-        "entities": plan.get("entities", []),
-        "geographic_scope": plan.get("geographic_scope", []),
-        "sector_scope": plan.get("sector_scope", []),
-    }
-
-    await asyncio.to_thread(
-        update_topic, topic_id, None, None, brief, json.dumps(config, ensure_ascii=False)
-    )
-
-    for kw in kw_list:
-        kw_str = str(kw).strip()
-        if kw_str:
-            await asyncio.to_thread(add_keyword, kw_str, "", topic_id)
-
-    for feed in feed_list:
-        url = feed.get("url", "") if isinstance(feed, dict) else str(feed)
-        label = feed.get("label", "") if isinstance(feed, dict) else ""
-        if url.strip():
-            await asyncio.to_thread(add_topic_feed, topic_id, url.strip(), label)
-
-    kws = await asyncio.to_thread(get_keywords, topic_id)
-    feeds = await asyncio.to_thread(get_topic_feeds, topic_id)
-
+@app.get("/api/topics/{topic_id}/generate-research-plan/status")
+async def api_generate_research_plan_status(topic_id: int):
+    payload = _task_status_payload(f"research-plan-{topic_id}")
     return {
-        "status": "ok",
-        "plan": {
-            "research_brief": brief,
-            "keywords": [k["keyword"] for k in kws],
-            "rss_feeds": [{"id": f["id"], "url": f["feed_url"], "label": f["label"]} for f in feeds],
-            **config,
-        },
+        "generating": payload["running"],
+        "status": payload["status"],
+        "error": payload["error"],
+        "result_summary": payload["result_summary"],
+        "finished_at": payload["finished_at"],
     }
 
 

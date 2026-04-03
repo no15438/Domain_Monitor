@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Loader2,
@@ -27,6 +27,7 @@ import type { Article } from "@/lib/api";
 
 type SentimentFilter = "all" | "positive" | "neutral" | "negative";
 type SortMode = "relevance" | "latest";
+const PAGE_SIZE = 50;
 
 const SENTIMENT_FILTERS: {
   key: SentimentFilter;
@@ -41,7 +42,11 @@ const SENTIMENT_FILTERS: {
   { key: "negative", label: "Negative", icon: TrendingDown, color: "text-negative", activeColor: "bg-negative/15 text-negative" },
 ];
 
-export default function EventFeed() {
+export default function EventFeed({
+  layout = "desktop",
+}: {
+  layout?: "desktop" | "mobile";
+}) {
   const {
     articles,
     setArticles,
@@ -57,7 +62,11 @@ export default function EventFeed() {
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [activeTotal, setActiveTotal] = useState(0);
+  const [loadedActiveCount, setLoadedActiveCount] = useState(0);
   const topicPrefs = activeTopicId != null
     ? eventFeedPrefsByTopic[activeTopicId]
     : undefined;
@@ -71,15 +80,32 @@ export default function EventFeed() {
   const [archivedArticles, setArchivedArticles] = useState<Article[]>([]);
   const [archivedCount, setArchivedCount] = useState(0);
   const showArchived = topicPrefs?.showArchived ?? false;
+  const isMobile = layout === "mobile";
+  const feedScrollRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
+  const shellClass = isMobile
+    ? "flex h-full min-h-0 w-full flex-col overflow-hidden bg-surface"
+    : "flex-3 min-w-[260px] flex flex-col overflow-hidden border-r border-border";
+  const hasMoreActive = loadedActiveCount < activeTotal;
 
   // Fetch active articles — re-fetch when event filter changes
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setLoadMoreError(null);
+    setLoadingMore(false);
+    setActiveTotal(0);
+    setLoadedActiveCount(0);
 
-    fetchArticles(50, 0, activeTopicId, sortMode, "active", selectedKnowledgeEventId)
-      .then((data) => { if (!cancelled) setArticles(data.articles); })
+    fetchArticles(PAGE_SIZE, 0, activeTopicId, sortMode, "active", selectedKnowledgeEventId)
+      .then((data) => {
+        if (!cancelled) {
+          setArticles(data.articles);
+          setActiveTotal(data.total);
+          setLoadedActiveCount(data.articles.length);
+        }
+      })
       .catch((e) => {
         if (process.env.NODE_ENV === "development") console.warn("[fetch articles]", e);
         if (!cancelled) setError("Failed to load articles. Please retry.");
@@ -88,6 +114,74 @@ export default function EventFeed() {
 
     return () => { cancelled = true; };
   }, [activeTopicId, sortMode, reloadKey, selectedKnowledgeEventId, setArticles]);
+
+  const loadMoreArticles = useCallback(async () => {
+    if (loading || loadingMore || !hasMoreActive) return;
+
+    const offset = loadedActiveCount;
+    setLoadingMore(true);
+    setLoadMoreError(null);
+
+    try {
+      const data = await fetchArticles(
+        PAGE_SIZE,
+        offset,
+        activeTopicId,
+        sortMode,
+        "active",
+        selectedKnowledgeEventId,
+      );
+      const latestArticles = useStore.getState().articles;
+      const existingIds = new Set(latestArticles.map((article) => article.id));
+      const uniqueArticles = data.articles.filter((article) => !existingIds.has(article.id));
+      const nextLoadedCount = data.articles.length === 0 ? data.total : offset + data.articles.length;
+
+      setActiveTotal(data.total);
+      setLoadedActiveCount(Math.min(nextLoadedCount, data.total));
+
+      if (uniqueArticles.length > 0) {
+        setArticles([...latestArticles, ...uniqueArticles]);
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV === "development") console.warn("[load more articles]", e);
+      setLoadMoreError("Failed to load more articles.");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [
+    activeTopicId,
+    hasMoreActive,
+    loadedActiveCount,
+    loading,
+    loadingMore,
+    selectedKnowledgeEventId,
+    setArticles,
+    sortMode,
+  ]);
+
+  useEffect(() => {
+    if (loading || loadingMore || !hasMoreActive) return;
+
+    const root = feedScrollRef.current;
+    const target = loadMoreRef.current;
+    if (!root || !target) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void loadMoreArticles();
+        }
+      },
+      {
+        root,
+        rootMargin: "160px 0px",
+        threshold: 0.1,
+      },
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [hasMoreActive, loadMoreArticles, loading, loadingMore]);
 
   // Fetch archived count
   useEffect(() => {
@@ -160,20 +254,32 @@ export default function EventFeed() {
   }, [activeTopicId, prependArticles, refreshInsights, selectedKnowledgeEventId]);
 
   function handleArticleRemoved(id: string) {
+    const wasActive = articles.some((article) => article.id === id);
+    const wasArchived = archivedArticles.some((article) => article.id === id);
+
     setArticles(articles.filter((a) => a.id !== id));
     setArchivedArticles((prev) => prev.filter((a) => a.id !== id));
-    setArchivedCount((c) => Math.max(0, c - 1));
+    if (wasActive) {
+      setLoadedActiveCount((count) => Math.max(0, count - 1));
+      setActiveTotal((count) => Math.max(0, count - 1));
+    }
+    if (wasArchived) {
+      setArchivedCount((count) => Math.max(0, count - 1));
+    }
     refreshInsights();
   }
 
   function handleArticleArchived(id: string) {
     setArticles(articles.filter((a) => a.id !== id));
+    setLoadedActiveCount((count) => Math.max(0, count - 1));
+    setActiveTotal((count) => Math.max(0, count - 1));
     setArchivedCount((c) => c + 1);
     refreshInsights();
   }
 
   function handleArticleRestored(id: string) {
     setArchivedArticles((prev) => prev.filter((a) => a.id !== id));
+    setActiveTotal((count) => count + 1);
     setArchivedCount((c) => Math.max(0, c - 1));
     refreshInsights();
   }
@@ -198,7 +304,7 @@ export default function EventFeed() {
 
   if (loading) {
     return (
-      <div className="flex-3 min-w-[260px] flex items-center justify-center border-r border-border">
+      <div className={`${shellClass} items-center justify-center`}>
         <Loader2 className="w-6 h-6 text-accent animate-spin" />
       </div>
     );
@@ -206,10 +312,10 @@ export default function EventFeed() {
 
   if (error) {
     return (
-      <div className="flex-3 min-w-[260px] flex flex-col items-center justify-center gap-3 border-r border-border px-6 text-center">
+      <div className={`${shellClass} items-center justify-center gap-3 px-6 text-center`}>
         <AlertTriangle className="h-10 w-10 text-important" />
         <div>
-          <p className="text-sm font-medium">Activity feed unavailable</p>
+          <p className="text-sm font-medium">News unavailable</p>
           <p className="mt-1 text-xs text-muted">{error}</p>
         </div>
         <button
@@ -224,7 +330,7 @@ export default function EventFeed() {
 
   if (articles.length === 0 && archivedCount === 0) {
     return (
-      <div className="flex-3 min-w-[260px] flex flex-col items-center justify-center text-muted gap-3 border-r border-border">
+      <div className={`${shellClass} items-center justify-center text-muted gap-3`}>
         <Inbox className="w-12 h-12" />
         {selectedKnowledgeEventId ? (
           <>
@@ -249,7 +355,7 @@ export default function EventFeed() {
   }
 
   return (
-    <div className="flex-3 min-w-[260px] flex flex-col overflow-hidden border-r border-border">
+    <div className={shellClass}>
       {/* Event filter banner */}
       {selectedKnowledgeEventId && (
         <div className="px-4 py-2 bg-accent/8 border-b border-accent/20 flex items-center gap-2">
@@ -285,14 +391,14 @@ export default function EventFeed() {
       {/* Toolbar */}
       <div className="px-4 py-2 border-b border-border space-y-2">
         {/* View label + sort */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-1 text-[11px] font-medium text-muted">
             <LayoutList className="w-3 h-3" />
             <span>News</span>
           </div>
 
           {/* Sort toggle */}
-          <div className="ml-auto flex items-center gap-1">
+          <div className="ml-auto flex flex-wrap items-center gap-1">
             <button
               onClick={() => activeTopicId != null && setEventFeedPrefs(activeTopicId, { sortMode: "relevance" })}
               className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-colors ${
@@ -321,7 +427,7 @@ export default function EventFeed() {
         </div>
 
         {/* Sentiment filter */}
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           {SENTIMENT_FILTERS.map(({ key, label, icon: Icon, color, activeColor }) => {
             const count = sentimentCounts[key];
             const isActive = sentimentFilter === key;
@@ -345,7 +451,7 @@ export default function EventFeed() {
       </div>
 
       {/* Feed */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div ref={feedScrollRef} className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
         {filteredArticles.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-muted">
             <p className="text-xs">No {sentimentFilter !== "all" ? sentimentFilter : ""} articles found.</p>
@@ -360,6 +466,33 @@ export default function EventFeed() {
               onArchived={handleArticleArchived}
             />
           ))
+        )}
+
+        <div ref={loadMoreRef} className="h-1" aria-hidden="true" />
+
+        {loadingMore && (
+          <div className="flex items-center justify-center gap-2 py-2 text-xs text-muted">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Loading more news…</span>
+          </div>
+        )}
+
+        {loadMoreError && (
+          <div className="flex items-center justify-center gap-2 py-2 text-xs text-muted">
+            <span>{loadMoreError}</span>
+            <button
+              onClick={() => void loadMoreArticles()}
+              className="rounded-md border border-border px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-surface-hover"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {!loadingMore && !loadMoreError && !hasMoreActive && activeTotal > 0 && (
+          <div className="flex items-center justify-center py-2 text-[11px] text-muted">
+            All news loaded
+          </div>
         )}
 
         {/* Archived fold */}

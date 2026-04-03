@@ -103,6 +103,16 @@ export interface ResearchPlan {
   sector_scope: string[];
 }
 
+export type WorkspacePane = "brief" | "feed" | "analysis" | "chat";
+
+export interface ResearchPlanTaskStatus {
+  generating: boolean;
+  status?: string;
+  error?: string | null;
+  result_summary?: string | null;
+  finished_at?: string | null;
+}
+
 export interface ChatTraceNode {
   id: string;
   type: "event" | "claim" | "snapshot" | "artifact";

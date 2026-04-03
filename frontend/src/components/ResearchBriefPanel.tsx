@@ -24,7 +24,6 @@ import { useStore } from "@/stores/useStore";
 import {
   updateTopicBrief,
   updateResearchConfig,
-  generateResearchPlan,
   fetchKeywords,
   addKeyword,
   removeKeyword,
@@ -42,6 +41,8 @@ interface Props {
   topic: Topic;
   collapsed: boolean;
   onToggle: () => void;
+  layout?: "desktop" | "mobile";
+  onPlanApplied?: () => Promise<void> | void;
 }
 
 type SectionKey = "keywords" | "feeds" | "angles" | "entities" | "geo" | "sector";
@@ -146,20 +147,39 @@ function Section({
   );
 }
 
-export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props) {
-  const { activeTopicId, keywords, setKeywords, addToast, getActionState } = useStore();
+export default function ResearchBriefPanel({
+  topic,
+  collapsed,
+  onToggle,
+  layout = "desktop",
+  onPlanApplied,
+}: Props) {
+  const {
+    activeTopicId,
+    keywords,
+    setKeywords,
+    addToast,
+    getActionState,
+    researchPlanDraftByTopic,
+    researchPlanByTopic,
+    setResearchPlanDraft,
+    hydrateResearchPlanStatus,
+    startResearchPlanGeneration,
+  } = useStore();
   const [brief, setBrief] = useState(topic.research_brief ?? "");
   const [config, setConfig] = useState<ResearchConfig>(() => parseResearchConfig(topic));
   const [saved, setSaved] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [generating, setGenerating] = useState(false);
-  const [promptInput, setPromptInput] = useState("");
   const [feeds, setFeeds] = useState<TopicFeed[]>([]);
   const [openSections, setOpenSections] = useState<Set<SectionKey>>(
     new Set(["keywords", "angles"]),
   );
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const researchPlanTask = activeTopicId != null ? researchPlanByTopic[activeTopicId] : undefined;
+  const promptInput = activeTopicId != null ? (researchPlanDraftByTopic[activeTopicId] ?? "") : "";
+  const generating = researchPlanTask?.isGenerating ?? false;
+  const isMobile = layout === "mobile";
 
   useEffect(() => {
     setBrief(topic.research_brief ?? "");
@@ -180,6 +200,50 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
       fetchTopicFeeds(activeTopicId).then((d) => setFeeds(d.feeds)).catch((e) => { if (process.env.NODE_ENV === "development") console.warn("[fetch]", e); });
     }
   }, [activeTopicId]);
+
+  useEffect(() => {
+    if (activeTopicId == null) return;
+    void hydrateResearchPlanStatus(activeTopicId);
+  }, [activeTopicId, hydrateResearchPlanStatus]);
+
+  const wasGeneratingRef = useRef(false);
+  useEffect(() => {
+    if (generating) {
+      wasGeneratingRef.current = true;
+      return;
+    }
+    if (!activeTopicId) return;
+    if (!wasGeneratingRef.current) return;
+
+    if (researchPlanTask?.lastStatus === "done" && researchPlanTask.finishedAt) {
+      wasGeneratingRef.current = false;
+      void (async () => {
+        try {
+          await onPlanApplied?.();
+          const feedData = await fetchTopicFeeds(activeTopicId);
+          setFeeds(feedData.feeds);
+          setOpenSections(new Set(["keywords", "angles", "entities", "feeds"]));
+          setResearchPlanDraft(activeTopicId, "");
+        } catch (e) {
+          if (process.env.NODE_ENV === "development") console.warn("[research-plan-refresh]", e);
+          addToast("Research setup finished, but refreshing the workspace failed.", "warn");
+        }
+      })();
+      return;
+    }
+
+    if (researchPlanTask?.lastStatus === "error") {
+      wasGeneratingRef.current = false;
+    }
+  }, [
+    activeTopicId,
+    addToast,
+    generating,
+    onPlanApplied,
+    researchPlanTask?.finishedAt,
+    researchPlanTask?.lastStatus,
+    setResearchPlanDraft,
+  ]);
 
   const toggle = (key: SectionKey) =>
     setOpenSections((prev) => {
@@ -255,34 +319,11 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
   // ── AI Generate Full Plan ──
   async function handleGenerate() {
     if (activeTopicId == null || !promptInput.trim()) return;
-    const actionKey = `ui:research-brief:generate-plan:${activeTopicId}`;
-    if (getActionState(actionKey).status === "running") return;
-    setGenerating(true);
     try {
-      const res = await runWithAction(actionKey, () => generateResearchPlan(activeTopicId, promptInput.trim()));
-      if (res.status === "ok" && res.plan) {
-        setBrief(res.plan.research_brief);
-        setSaved(true);
-        setConfig({
-          angles: res.plan.angles ?? [],
-          entities: res.plan.entities ?? [],
-          geographic_scope: res.plan.geographic_scope ?? [],
-          sector_scope: res.plan.sector_scope ?? [],
-        });
-        const kwData = await fetchKeywords(activeTopicId);
-        setKeywords(kwData.keywords);
-        const feedData = await fetchTopicFeeds(activeTopicId);
-        setFeeds(feedData.feeds);
-        setPromptInput("");
-        setOpenSections(new Set(["keywords", "angles", "entities", "feeds"]));
-      } else {
-        addToast(res.message || "Failed to generate research plan.", "error");
-      }
+      await startResearchPlanGeneration(activeTopicId, promptInput.trim());
     } catch (e) {
       if (process.env.NODE_ENV === "development") console.warn("[generate-plan]", e);
       addToast("Failed to generate research plan.", "error");
-    } finally {
-      setGenerating(false);
     }
   }
 
@@ -342,7 +383,7 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
   }
 
   // ── Collapsed State ──
-  if (collapsed) {
+  if (!isMobile && collapsed) {
     return (
       <div className="w-10 shrink-0 border-r border-border bg-surface flex flex-col items-center pt-3 gap-3">
         <button onClick={onToggle} className="p-1.5 rounded-lg text-muted hover:text-foreground hover:bg-surface-hover transition-colors" title="Expand research panel">
@@ -356,16 +397,26 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
   }
 
   return (
-    <div className="w-[280px] shrink-0 border-r border-border bg-surface flex flex-col overflow-hidden">
+    <div
+      className={`bg-surface flex min-h-0 flex-col overflow-hidden ${
+        isMobile
+          ? "h-full w-full"
+          : "w-[280px] shrink-0 border-r border-border"
+      }`}
+    >
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-border bg-surface">
+      <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-2.5">
         <div className="flex items-center gap-2 min-w-0">
           <FileText className="w-4 h-4 text-accent shrink-0" />
-          <span className="text-xs font-semibold tracking-tight truncate">Research Brief</span>
+          <span className="text-xs font-semibold tracking-tight truncate">
+            {isMobile ? "Research Setup" : "Research"}
+          </span>
         </div>
-        <button onClick={onToggle} className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-hover transition-colors" title="Collapse">
-          <PanelLeftClose className="w-3.5 h-3.5" />
-        </button>
+        {!isMobile && (
+          <button onClick={onToggle} className="p-1 rounded text-muted hover:text-foreground hover:bg-surface-hover transition-colors" title="Collapse">
+            <PanelLeftClose className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -381,7 +432,7 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
           <div className="flex gap-1.5">
             <textarea
               value={promptInput}
-              onChange={(e) => setPromptInput(e.target.value)}
+              onChange={(e) => activeTopicId != null && setResearchPlanDraft(activeTopicId, e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -389,12 +440,12 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
                 }
               }}
               placeholder="Describe what you want to research…"
-              rows={2}
+              rows={isMobile ? 3 : 2}
               className="flex-1 px-2.5 py-1.5 text-xs leading-relaxed rounded-lg bg-background border border-border focus:border-accent outline-none resize-none placeholder:text-muted/50"
             />
             <button
               onClick={handleGenerate}
-              disabled={generating || !promptInput.trim() || (activeTopicId != null && getActionState(`ui:research-brief:generate-plan:${activeTopicId}`).status === "running")}
+              disabled={generating || !promptInput.trim() || (activeTopicId != null && getActionState(`task:research-plan:${activeTopicId}`).status === "running")}
               className="self-end p-2 rounded-lg bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors shrink-0"
               title="Generate research plan"
             >
@@ -403,7 +454,12 @@ export default function ResearchBriefPanel({ topic, collapsed, onToggle }: Props
           </div>
           {generating && (
             <p className="text-[10px] text-accent mt-1.5 animate-pulse">
-              AI is generating your research plan…
+              AI is generating your research plan in the background…
+            </p>
+          )}
+          {!generating && researchPlanTask?.lastStatus === "error" && researchPlanTask.lastError && (
+            <p className="mt-1.5 text-[10px] text-important">
+              {researchPlanTask.lastError}
             </p>
           )}
         </div>
