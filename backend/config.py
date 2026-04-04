@@ -1,5 +1,10 @@
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+
+# 始终从 backend/ 目录加载 .env，避免从仓库根目录启动 uvicorn 时读不到 backend/.env
+_BACKEND_DIR = Path(__file__).resolve().parent
 
 
 class Settings(BaseSettings):
@@ -49,7 +54,10 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
 
-    model_config = {"env_file": ".env", "extra": "ignore"}
-
+    model_config = SettingsConfigDict(
+        env_file=str(_BACKEND_DIR / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 settings = Settings()
