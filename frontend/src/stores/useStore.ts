@@ -3,14 +3,20 @@ import { persist } from "zustand/middleware";
 import type {
   AnalysisCitation,
   Article,
+  ChatConversationMessage,
+  ChatConversationPayload,
   Keyword,
   Topic,
   EventCluster,
-  ChatTracePayload,
-  ChatSource,
+  ChatTaskStatus as PersistedChatTaskStatus,
+  ConversationStreamEvent,
   WorkspacePane,
 } from "@/lib/api";
 import {
+  createChatTask as apiCreateChatTask,
+  fetchChatConversation,
+  fetchChatTaskStatus,
+  fetchLatestChatConversationForTopic,
   fetchGlobalOverview,
   fetchGlobalOverviewStatus,
   postGlobalOverviewGenerate,
@@ -23,10 +29,17 @@ import {
   postGenerateResearchPlan,
 } from "@/lib/api";
 
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
+export type ChatMessage = ChatConversationMessage;
+
+export interface TopicChatTaskSlice {
+  taskId: string;
+  conversationId: number;
+  assistantMessageId: string;
+  status: PersistedChatTaskStatus["status"];
+  running: boolean;
+  error: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
 export interface Toast {
@@ -78,6 +91,45 @@ export interface ResearchPlanTaskSlice {
 const globalOverviewPollers = new Map<number, ReturnType<typeof setInterval>>();
 const liveSummaryPollers = new Map<number, ReturnType<typeof setInterval>>();
 const researchPlanPollers = new Map<number, ReturnType<typeof setInterval>>();
+const chatTaskPollers = new Map<string, ReturnType<typeof setInterval>>();
+
+function chatTopicKey(topicId: number | null) {
+  return String(topicId ?? "null");
+}
+
+function stopChatTaskPoll(topicId: number | null) {
+  const key = chatTopicKey(topicId);
+  const timer = chatTaskPollers.get(key);
+  if (timer) {
+    clearInterval(timer);
+    chatTaskPollers.delete(key);
+  }
+}
+
+function replaceTrace(
+  traces: ChatMessage["trace"] | undefined,
+  trace: NonNullable<ConversationStreamEvent["trace"]>,
+): ChatMessage["trace"] {
+  const current = [...(traces ?? [])];
+  const idx = current.findIndex((item) => item.kind === trace.kind);
+  if (idx >= 0) current[idx] = trace;
+  else current.push(trace);
+  return current;
+}
+
+function toTopicChatTask(task: PersistedChatTaskStatus | null): TopicChatTaskSlice | null {
+  if (!task) return null;
+  return {
+    taskId: task.id,
+    conversationId: task.conversation_id,
+    assistantMessageId: task.assistant_message_id,
+    status: task.status,
+    running: task.running,
+    error: task.error,
+    startedAt: task.started_at,
+    finishedAt: task.finished_at,
+  };
+}
 // key = String(topicId ?? "null")
 const fetchPollers = new Map<string, ReturnType<typeof setInterval>>();
 const taskNotifications = new Map<string, string>();
@@ -158,10 +210,9 @@ interface AppState {
   activeTopicId: number | null;
   articles: Article[];
   keywords: Keyword[];
-  /** Per-topic chat history keyed by String(topicId). Persisted to localStorage. */
-  chatMessagesByTopic: Record<string, ChatMessage[]>;
-  chatTraceByTopic: Record<string, ChatTracePayload[]>;
-  chatSourcesByTopic: Record<string, ChatSource[]>;
+  chatConversationIdByTopic: Record<string, number | null>;
+  chatTaskByTopic: Record<string, TopicChatTaskSlice | null>;
+  chatMessagesByConversation: Record<string, ChatMessage[]>;
   selectedArticle: Article | null;
   /** Native event chat context — preferred over selectedArticle for event cards. */
   selectedEventContext: EventChatContext | null;
@@ -199,12 +250,12 @@ interface AppState {
   setChatOpen: (v: boolean) => void;
   setHighlightedEventId: (id: string | null) => void;
   refreshInsights: () => void;
-  addChatMessage: (msg: ChatMessage) => void;
-  appendToLastAssistant: (chunk: string) => void;
   clearChat: () => void;
-  appendChatTrace: (topicId: number | null, trace: ChatTracePayload) => void;
-  clearChatTrace: (topicId: number | null) => void;
-  setChatSources: (topicId: number | null, sources: ChatSource[]) => void;
+  hydrateChatConversation: (topicId: number | null) => Promise<void>;
+  startChatTask: (message: string, articleContext?: string) => Promise<void>;
+  ensureChatTaskPoll: (topicId: number | null) => void;
+  applyChatConversationPayload: (topicId: number | null, payload: ChatConversationPayload | null) => void;
+  applyChatStreamEvent: (conversationId: number, event: ConversationStreamEvent) => void;
   addToast: (message: string, level?: Toast["level"]) => void;
   dismissToast: (id: string) => void;
   hydrateGlobalOverview: (topicId: number) => Promise<void>;
@@ -255,9 +306,9 @@ export const useStore = create<AppState>()(
   activeTopicId: null,
   articles: [],
   keywords: [],
-  chatMessagesByTopic: {},
-  chatTraceByTopic: {},
-  chatSourcesByTopic: {},
+  chatConversationIdByTopic: {},
+  chatTaskByTopic: {},
+  chatMessagesByConversation: {},
   selectedArticle: null,
   selectedEventContext: null,
   selectedKnowledgeEventId: null,
@@ -870,8 +921,16 @@ export const useStore = create<AppState>()(
       stopLiveSummaryPoll(prev);
       stopResearchPlanPoll(prev);
       stopFetchPoll(String(prev));
+      stopChatTaskPoll(prev);
     }
-    set({ activeTopicId: id, highlightedEventId: null, selectedKnowledgeEventId: null, selectedKnowledgeEventTitle: null });
+    const nextTask = get().chatTaskByTopic[chatTopicKey(id)] ?? null;
+    set({
+      activeTopicId: id,
+      highlightedEventId: null,
+      selectedKnowledgeEventId: null,
+      selectedKnowledgeEventTitle: null,
+      isChatLoading: !!nextTask?.running,
+    });
   },
   setArticles: (articles) => set({ articles }),
   prependArticles: (newArticles) =>
@@ -900,63 +959,169 @@ export const useStore = create<AppState>()(
     }),
   setHighlightedEventId: (id) => set({ highlightedEventId: id }),
   refreshInsights: () => set((s) => ({ insightRefreshKey: s.insightRefreshKey + 1 })),
-  addChatMessage: (msg) =>
-    set((s) => {
-      const key = String(s.activeTopicId ?? "null");
-      const prev = s.chatMessagesByTopic[key] ?? [];
-      return { chatMessagesByTopic: { ...s.chatMessagesByTopic, [key]: [...prev, msg] } };
-    }),
-  appendToLastAssistant: (chunk) =>
-    set((s) => {
-      const key = String(s.activeTopicId ?? "null");
-      const msgs = [...(s.chatMessagesByTopic[key] ?? [])];
-      const last = msgs[msgs.length - 1];
-      if (last && last.role === "assistant") {
-        msgs[msgs.length - 1] = { ...last, content: last.content + chunk };
-      }
-      return { chatMessagesByTopic: { ...s.chatMessagesByTopic, [key]: msgs } };
-    }),
   clearChat: () =>
     set((s) => {
-      const key = String(s.activeTopicId ?? "null");
+      const key = chatTopicKey(s.activeTopicId);
+      stopChatTaskPoll(s.activeTopicId);
       return {
-        chatMessagesByTopic: { ...s.chatMessagesByTopic, [key]: [] },
-        chatTraceByTopic: { ...s.chatTraceByTopic, [key]: [] },
-        chatSourcesByTopic: { ...s.chatSourcesByTopic, [key]: [] },
+        chatConversationIdByTopic: { ...s.chatConversationIdByTopic, [key]: null },
+        chatTaskByTopic: { ...s.chatTaskByTopic, [key]: null },
         selectedArticle: null,
+        selectedEventContext: null,
+        isChatLoading: false,
       };
     }),
-  appendChatTrace: (topicId: number | null, trace: ChatTracePayload) =>
+  applyChatConversationPayload: (topicId, payload) =>
     set((s) => {
-      const key = String(topicId ?? "null");
-      const current = s.chatTraceByTopic[key] ?? [];
-      const updated = [...current];
-      const existingIdx = updated.findIndex((t) => t.kind === trace.kind);
-      if (existingIdx !== -1) {
-        updated[existingIdx] = trace;
-      } else {
-        updated.push(trace);
+      const topicKey = chatTopicKey(topicId);
+      const conversationId = payload?.conversation?.id ?? null;
+      const nextConversationIdByTopic = {
+        ...s.chatConversationIdByTopic,
+        [topicKey]: conversationId,
+      };
+      const nextTaskByTopic = {
+        ...s.chatTaskByTopic,
+        [topicKey]: toTopicChatTask(payload?.task ?? null),
+      };
+      const nextMessagesByConversation = { ...s.chatMessagesByConversation };
+      if (conversationId != null) {
+        nextMessagesByConversation[String(conversationId)] = payload?.messages ?? [];
       }
-      return { chatTraceByTopic: { ...s.chatTraceByTopic, [key]: updated } };
-    }),
-  clearChatTrace: (topicId: number | null) =>
-    set((s) => {
-      const key = String(topicId ?? "null");
       return {
-        chatTraceByTopic: { ...s.chatTraceByTopic, [key]: [] },
-        chatSourcesByTopic: { ...s.chatSourcesByTopic, [key]: [] },
+        chatConversationIdByTopic: nextConversationIdByTopic,
+        chatTaskByTopic: nextTaskByTopic,
+        chatMessagesByConversation: nextMessagesByConversation,
+        isChatLoading: s.activeTopicId === topicId ? !!payload?.task?.running : s.isChatLoading,
       };
     }),
-  setChatSources: (topicId: number | null, sources: ChatSource[]) =>
+  hydrateChatConversation: async (topicId) => {
+    const topicKey = chatTopicKey(topicId);
+    const knownConversationId = get().chatConversationIdByTopic[topicKey] ?? null;
+    let payload: ChatConversationPayload | null = null;
+
+    if (knownConversationId != null) {
+      payload = await fetchChatConversation(knownConversationId);
+    }
+    if (!payload && topicId != null) {
+      payload = await fetchLatestChatConversationForTopic(topicId);
+    }
+
+    get().applyChatConversationPayload(topicId, payload);
+    if (payload?.task?.running) get().ensureChatTaskPoll(topicId);
+    else stopChatTaskPoll(topicId);
+  },
+  startChatTask: async (message, articleContext) => {
+    const topicId = get().activeTopicId;
+    const topicKey = chatTopicKey(topicId);
+    const conversationId = get().chatConversationIdByTopic[topicKey] ?? null;
+    await apiCreateChatTask(message, articleContext, topicId, conversationId);
+    await get().hydrateChatConversation(topicId);
+    get().ensureChatTaskPoll(topicId);
+    set({
+      selectedArticle: null,
+      selectedEventContext: null,
+      isChatLoading: true,
+    });
+  },
+  ensureChatTaskPoll: (topicId) => {
+    if (topicId == null) return;
+    const topicKey = chatTopicKey(topicId);
+    const task = get().chatTaskByTopic[topicKey];
+    if (!task?.running || !task.taskId) {
+      stopChatTaskPoll(topicId);
+      return;
+    }
+    if (chatTaskPollers.has(topicKey)) return;
+
+    const tick = async () => {
+      const currentTask = get().chatTaskByTopic[topicKey];
+      if (!currentTask?.taskId) {
+        stopChatTaskPoll(topicId);
+        return;
+      }
+      try {
+        const latest = await fetchChatTaskStatus(currentTask.taskId);
+        if (!latest) {
+          stopChatTaskPoll(topicId);
+          await get().hydrateChatConversation(topicId);
+          return;
+        }
+        set((s) => ({
+          chatTaskByTopic: {
+            ...s.chatTaskByTopic,
+            [topicKey]: toTopicChatTask(latest),
+          },
+          isChatLoading: s.activeTopicId === topicId ? latest.running : s.isChatLoading,
+        }));
+        if (!latest.running) {
+          stopChatTaskPoll(topicId);
+          await get().hydrateChatConversation(topicId);
+        }
+      } catch {}
+    };
+
+    void tick();
+    const intervalId = setInterval(() => void tick(), 2000);
+    chatTaskPollers.set(topicKey, intervalId);
+  },
+  applyChatStreamEvent: (conversationId, event) =>
     set((s) => {
-      const key = String(topicId ?? "null");
-      return { chatSourcesByTopic: { ...s.chatSourcesByTopic, [key]: sources } };
+      const conversationKey = String(conversationId);
+      const messages = [...(s.chatMessagesByConversation[conversationKey] ?? [])];
+      const idx = messages.findIndex((msg) => msg.id === event.assistant_message_id);
+      if (idx === -1) return {};
+
+      const current = messages[idx];
+      const updated: ChatMessage = {
+        ...current,
+        content: event.content ? `${current.content}${event.content}` : current.content,
+        status: event.message_status ?? current.status,
+        sources: event.sources ?? current.sources,
+        trace: event.trace ? replaceTrace(current.trace, event.trace) : current.trace,
+        error: event.error !== undefined ? event.error : current.error,
+      };
+      if (event.status && (updated.trace?.length ?? 0) === 0) {
+        updated.status = "running";
+      }
+      messages[idx] = updated;
+
+      const nextTaskByTopic = { ...s.chatTaskByTopic };
+      let nextIsChatLoading = s.isChatLoading;
+      for (const [topicKey, mappedConversationId] of Object.entries(s.chatConversationIdByTopic)) {
+        if (mappedConversationId !== conversationId) continue;
+        const currentTask = nextTaskByTopic[topicKey];
+        if (currentTask && event.task_status) {
+          nextTaskByTopic[topicKey] = {
+            ...currentTask,
+            status: event.task_status,
+            running: event.task_status === "running",
+            error: event.error !== undefined ? event.error : currentTask.error,
+            finishedAt:
+              event.task_status === "done" || event.task_status === "error"
+                ? new Date().toISOString()
+                : currentTask.finishedAt,
+          };
+        }
+        if (topicKey === chatTopicKey(s.activeTopicId) && event.done) {
+          nextIsChatLoading = false;
+        }
+      }
+
+      return {
+        chatMessagesByConversation: {
+          ...s.chatMessagesByConversation,
+          [conversationKey]: messages,
+        },
+        chatTaskByTopic: nextTaskByTopic,
+        isChatLoading: nextIsChatLoading,
+      };
     }),
     }),
     {
       name: "domain-monitor-chat",
       partialize: (state) => ({
-        chatMessagesByTopic: state.chatMessagesByTopic,
+        chatConversationIdByTopic: state.chatConversationIdByTopic,
+        chatMessagesByConversation: state.chatMessagesByConversation,
         analysisTabByTopic: state.analysisTabByTopic,
         analysisWindowByTopic: state.analysisWindowByTopic,
         briefCollapsedByTopic: state.briefCollapsedByTopic,

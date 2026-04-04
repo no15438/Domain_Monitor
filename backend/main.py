@@ -70,6 +70,16 @@ from database import (
     task_is_running,
     task_get,
     task_cleanup_stale,
+    chat_cleanup_stale,
+    chat_recover_interrupted_tasks,
+    create_chat_conversation,
+    create_chat_message,
+    create_chat_task,
+    get_chat_conversation_payload,
+    get_latest_chat_conversation_payload_for_topic,
+    get_chat_task,
+    update_chat_message,
+    update_chat_task,
 )
 from vector_store import delete_document
 from scheduler import start_scheduler, stop_scheduler
@@ -87,6 +97,9 @@ log = logging.getLogger("main")
 # tasks that were killed must NOT appear as "running" to clients.
 _bg_generating: set[str] = set()
 _bg_lock = threading.Lock()
+_chat_stream_loop: asyncio.AbstractEventLoop | None = None
+_chat_stream_lock = threading.Lock()
+_chat_stream_subscribers: dict[int, list[asyncio.Queue]] = {}
 
 
 def _bg_try_start(key: str) -> bool:
@@ -130,6 +143,195 @@ def _task_status_payload(key: str) -> dict:
         payload["result_summary"] = None
         payload["finished_at"] = None
     return payload
+
+
+def _merge_chat_trace(traces: list[dict], trace: dict) -> list[dict]:
+    updated = list(traces)
+    kind = trace.get("kind")
+    if not kind:
+        updated.append(trace)
+        return updated
+    for idx, existing in enumerate(updated):
+        if existing.get("kind") == kind:
+            updated[idx] = trace
+            return updated
+    updated.append(trace)
+    return updated
+
+
+def _register_chat_stream(conversation_id: int, queue: asyncio.Queue):
+    with _chat_stream_lock:
+        _chat_stream_subscribers.setdefault(conversation_id, []).append(queue)
+
+
+def _unregister_chat_stream(conversation_id: int, queue: asyncio.Queue):
+    with _chat_stream_lock:
+        subscribers = _chat_stream_subscribers.get(conversation_id, [])
+        remaining = [item for item in subscribers if item is not queue]
+        if remaining:
+            _chat_stream_subscribers[conversation_id] = remaining
+        else:
+            _chat_stream_subscribers.pop(conversation_id, None)
+
+
+async def _broadcast_chat_event(conversation_id: int, event: dict):
+    with _chat_stream_lock:
+        queues = list(_chat_stream_subscribers.get(conversation_id, []))
+    for queue in queues:
+        try:
+            await queue.put(event)
+        except Exception:
+            pass
+
+
+def _notify_chat_stream(conversation_id: int, event: dict):
+    if _chat_stream_loop is None:
+        return
+    with _chat_stream_lock:
+        has_subscribers = bool(_chat_stream_subscribers.get(conversation_id))
+    if not has_subscribers:
+        return
+    asyncio.run_coroutine_threadsafe(
+        _broadcast_chat_event(conversation_id, event),
+        _chat_stream_loop,
+    )
+
+
+def _run_chat_task_sync(
+    *,
+    task_id: str,
+    conversation_id: int,
+    assistant_message_id: str,
+    message: str,
+    article_context: str | None,
+    topic_id: int | None,
+    history: list[dict],
+):
+    traces: list[dict] = []
+    sources: list[dict] = []
+    try:
+        for item in chat_stream_with_status(message, article_context, topic_id, history):
+            if isinstance(item, dict):
+                if item.get("status"):
+                    _notify_chat_stream(
+                        conversation_id,
+                        {
+                            "conversation_id": conversation_id,
+                            "assistant_message_id": assistant_message_id,
+                            "status": item["status"],
+                        },
+                    )
+                if item.get("trace"):
+                    traces = _merge_chat_trace(traces, item["trace"])
+                    update_chat_message(
+                        assistant_message_id,
+                        status="running",
+                        trace=traces,
+                    )
+                    _notify_chat_stream(
+                        conversation_id,
+                        {
+                            "conversation_id": conversation_id,
+                            "assistant_message_id": assistant_message_id,
+                            "trace": item["trace"],
+                        },
+                    )
+                if item.get("sources"):
+                    sources = item["sources"]
+                    update_chat_message(
+                        assistant_message_id,
+                        status="running",
+                        sources=sources,
+                    )
+                    _notify_chat_stream(
+                        conversation_id,
+                        {
+                            "conversation_id": conversation_id,
+                            "assistant_message_id": assistant_message_id,
+                            "sources": sources,
+                        },
+                    )
+                continue
+
+            chunk = str(item)
+            if not chunk:
+                continue
+            update_chat_message(
+                assistant_message_id,
+                append_content=chunk,
+                status="running",
+            )
+            _notify_chat_stream(
+                conversation_id,
+                {
+                    "conversation_id": conversation_id,
+                    "assistant_message_id": assistant_message_id,
+                    "content": chunk,
+                },
+            )
+
+        update_chat_message(
+            assistant_message_id,
+            status="done",
+            trace=traces,
+            sources=sources,
+            error="",
+        )
+        update_chat_task(task_id, status="done", error="")
+        _notify_chat_stream(
+            conversation_id,
+            {
+                "conversation_id": conversation_id,
+                "assistant_message_id": assistant_message_id,
+                "message_status": "done",
+                "task_status": "done",
+                "done": True,
+            },
+        )
+    except Exception as exc:
+        error = str(exc)
+        log.exception("chat task %s failed", task_id)
+        update_chat_message(
+            assistant_message_id,
+            status="error",
+            trace=traces,
+            sources=sources,
+            error=error,
+        )
+        update_chat_task(task_id, status="error", error=error)
+        _notify_chat_stream(
+            conversation_id,
+            {
+                "conversation_id": conversation_id,
+                "assistant_message_id": assistant_message_id,
+                "message_status": "error",
+                "task_status": "error",
+                "error": error,
+                "done": True,
+            },
+        )
+
+
+async def _run_chat_task_background(
+    *,
+    task_id: str,
+    conversation_id: int,
+    assistant_message_id: str,
+    message: str,
+    article_context: str | None,
+    topic_id: int | None,
+    history: list[dict],
+):
+    await asyncio.to_thread(
+        _run_chat_task_sync,
+        task_id=task_id,
+        conversation_id=conversation_id,
+        assistant_message_id=assistant_message_id,
+        message=message,
+        article_context=article_context,
+        topic_id=topic_id,
+        history=history,
+    )
 
 
 async def _run_global_overview_background(topic_id: int):
@@ -251,8 +453,12 @@ async def lifespan(_app: FastAPI):
         datefmt="%H:%M:%S",
     )
     set_event_loop(asyncio.get_running_loop())
+    global _chat_stream_loop
+    _chat_stream_loop = asyncio.get_running_loop()
     init_db(settings.database_path)
     task_cleanup_stale(timeout_minutes=30)
+    chat_recover_interrupted_tasks()
+    chat_cleanup_stale(timeout_minutes=30)
     start_scheduler()
     yield
     stop_scheduler()
@@ -1008,7 +1214,137 @@ class ChatReq(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     article_context: str | None = None
     topic_id: int | None = None
-    history: list[ChatHistoryMessage] = []
+    history: list[ChatHistoryMessage] = Field(default_factory=list)
+
+
+class ChatTaskReq(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    article_context: str | None = None
+    topic_id: int | None = None
+    conversation_id: int | None = None
+
+
+@app.post("/api/chat/tasks")
+async def chat_task_start(req: ChatTaskReq):
+    if req.topic_id is not None:
+        await _require_topic(req.topic_id)
+
+    conversation_id = req.conversation_id
+    payload = None
+    if conversation_id is not None:
+        payload = get_chat_conversation_payload(conversation_id)
+        if not payload:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        existing_topic_id = payload["conversation"].get("topic_id")
+        if existing_topic_id != req.topic_id:
+            raise HTTPException(status_code=400, detail="Conversation topic mismatch")
+        latest_task = payload.get("task")
+        if latest_task and latest_task.get("status") == "running":
+            raise HTTPException(status_code=409, detail="Chat task already running")
+    else:
+        conversation_id = create_chat_conversation(req.topic_id)
+        payload = {"conversation": {"id": conversation_id, "topic_id": req.topic_id}, "messages": [], "task": None}
+
+    history = [
+        {"role": item["role"], "content": item.get("content", "")}
+        for item in payload["messages"][-20:]
+        if item.get("role") in ("user", "assistant") and item.get("content", "").strip()
+    ]
+
+    user_message = create_chat_message(
+        conversation_id,
+        "user",
+        req.message,
+        status="done",
+    )
+    assistant_message = create_chat_message(
+        conversation_id,
+        "assistant",
+        "",
+        status="running",
+        sources=[],
+        trace=[],
+    )
+    task = create_chat_task(conversation_id, assistant_message["id"])
+
+    asyncio.create_task(
+        _run_chat_task_background(
+            task_id=task["id"],
+            conversation_id=conversation_id,
+            assistant_message_id=assistant_message["id"],
+            message=req.message,
+            article_context=req.article_context,
+            topic_id=req.topic_id,
+            history=history,
+        )
+    )
+    return {
+        "conversation_id": conversation_id,
+        "task_id": task["id"],
+        "user_message_id": user_message["id"],
+        "assistant_message_id": assistant_message["id"],
+    }
+
+
+@app.get("/api/chat/tasks/{task_id}/status")
+async def chat_task_status(task_id: str):
+    task = get_chat_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+@app.get("/api/chat/conversations/{conversation_id}")
+async def chat_conversation(conversation_id: int):
+    payload = get_chat_conversation_payload(conversation_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return payload
+
+
+@app.get("/api/topics/{topic_id}/chat/latest")
+async def chat_latest_for_topic(topic_id: int):
+    await _require_topic(topic_id)
+    payload = get_latest_chat_conversation_payload_for_topic(topic_id)
+    if not payload:
+        return {"conversation": None, "messages": [], "task": None}
+    return payload
+
+
+@app.get("/api/chat/conversations/{conversation_id}/stream")
+async def chat_conversation_stream(conversation_id: int, request: Request):
+    payload = get_chat_conversation_payload(conversation_id)
+    if not payload:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    queue: asyncio.Queue = asyncio.Queue()
+    _register_chat_stream(conversation_id, queue)
+
+    async def generate():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    yield "event: ping\ndata: {}\n\n"
+                    continue
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("done"):
+                    break
+        finally:
+            _unregister_chat_stream(conversation_id, queue)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.post("/api/chat")

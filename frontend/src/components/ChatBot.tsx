@@ -1,14 +1,27 @@
 "use client";
 
-import { Fragment, useRef, useEffect, useState, useMemo } from "react";
+import {
+  Children,
+  Fragment,
+  cloneElement,
+  isValidElement,
+  useRef,
+  useEffect,
+  useState,
+  useMemo,
+  type ReactNode,
+} from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Send, Trash2, X, Bot, User,
   ChevronDown, ChevronRight, CheckCircle2, CircleDashed,
   ExternalLink,
 } from "lucide-react";
 import { useStore } from "@/stores/useStore";
-import { streamChat } from "@/lib/api";
+import { streamConversation } from "@/lib/api";
 import type { ChatTracePayload, ChatSource } from "@/lib/api";
 
 // ─── Chat-rich text with inline source chips ─────────────────────────────────
@@ -183,6 +196,7 @@ function renderChatBlocks(
   let listItems: React.ReactNode[] = [];
   let listOrdered = false;
   let paraLines: string[] = [];
+  let tableRows: string[][] = [];
   let key = 0;
 
   const flushPara = () => {
@@ -206,11 +220,62 @@ function renderChatBlocks(
     listItems = [];
   };
 
+  const flushTable = () => {
+    if (tableRows.length === 0) return;
+    const sepIdx = tableRows.findIndex((row) =>
+      row.length > 0 && row.every((cell) => /^:?-+:?$/.test(cell.trim())),
+    );
+    const headerRow = sepIdx === 1 ? tableRows[0] : null;
+    const bodyRows = headerRow
+      ? tableRows.slice(2)
+      : tableRows.filter((_, index) => index !== sepIdx);
+    const tableKey = key++;
+
+    blocks.push(
+      <div key={tableKey} className="chat-table-wrap">
+        <table>
+          {headerRow && (
+            <thead>
+              <tr>
+                {headerRow.map((cell, index) => (
+                  <th key={index}>
+                    {renderChatInline(cell.trim(), sources, `th${tableKey}-${index}`, onNavigate).map(
+                      (node, nodeIndex) => <Fragment key={nodeIndex}>{node}</Fragment>,
+                    )}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {bodyRows.map((row, rowIndex) => (
+              <tr key={rowIndex}>
+                {row.map((cell, cellIndex) => (
+                  <td key={cellIndex}>
+                    {renderChatInline(
+                      cell.trim(),
+                      sources,
+                      `td${tableKey}-${rowIndex}-${cellIndex}`,
+                      onNavigate,
+                    ).map((node, nodeIndex) => <Fragment key={nodeIndex}>{node}</Fragment>)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>,
+    );
+    tableRows = [];
+  };
+
   for (const rawLine of lines) {
-    const trimmed = rawLine.trim();
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
 
     if (!trimmed) {
       flushList();
+      flushTable();
       flushPara();
       continue;
     }
@@ -218,6 +283,7 @@ function renderChatBlocks(
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
       flushList();
+      flushTable();
       flushPara();
       const level = Math.min(headingMatch[1].length, 4);
       const headingText = renderChatInline(headingMatch[2], sources, `h${level}-${key}`, onNavigate).map(
@@ -230,8 +296,16 @@ function renderChatBlocks(
       continue;
     }
 
+    if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+      flushPara();
+      flushList();
+      tableRows.push(trimmed.slice(1, -1).split("|"));
+      continue;
+    }
+
     const ulMatch = trimmed.match(/^[-*]\s+(.+)$/);
     if (ulMatch) {
+      flushTable();
       flushPara();
       if (listOrdered) flushList();
       listOrdered = false;
@@ -247,6 +321,7 @@ function renderChatBlocks(
 
     const olMatch = trimmed.match(/^\d+\.\s+(.+)$/);
     if (olMatch) {
+      flushTable();
       flushPara();
       if (!listOrdered && listItems.length > 0) flushList();
       listOrdered = true;
@@ -261,12 +336,61 @@ function renderChatBlocks(
     }
 
     flushList();
+    flushTable();
     paraLines.push(trimmed);
   }
 
   flushList();
+  flushTable();
   flushPara();
   return blocks;
+}
+
+function renderMarkdownChildren(
+  children: ReactNode,
+  sources: ChatSource[],
+  keyPrefix: string,
+  onNavigate: OnNavigate,
+): ReactNode[] {
+  const parts: ReactNode[] = [];
+
+  Children.toArray(children).forEach((child, index) => {
+    const childKey = `${keyPrefix}-${index}`;
+
+    if (typeof child === "string") {
+      parts.push(
+        ...renderChatInline(child, sources, childKey, onNavigate).map((node, nodeIndex) => (
+          <Fragment key={`${childKey}-${nodeIndex}`}>{node}</Fragment>
+        )),
+      );
+      return;
+    }
+
+    if (typeof child === "number" || typeof child === "bigint") {
+      parts.push(String(child));
+      return;
+    }
+
+    if (isValidElement<{ children?: ReactNode }>(child)) {
+      const nestedChildren = child.props.children;
+      if (nestedChildren === undefined) {
+        parts.push(child);
+        return;
+      }
+      parts.push(
+        cloneElement(
+          child,
+          { key: child.key ?? childKey },
+          renderMarkdownChildren(nestedChildren, sources, childKey, onNavigate),
+        ),
+      );
+      return;
+    }
+
+    parts.push(child);
+  });
+
+  return parts;
 }
 
 function ChatRichText({ content, sources }: { content: string; sources: ChatSource[] }) {
@@ -292,11 +416,37 @@ function ChatRichText({ content, sources }: { content: string; sources: ChatSour
     [activeTopicId, setAnalysisTab, setSelectedKnowledgeEvent, setChatOpen],
   );
 
-  const blocks = useMemo(
-    () => renderChatBlocks(content, sources, onNavigate),
-    [content, sources, onNavigate],
+  const markdownComponents = useMemo<Components>(
+    () => ({
+      p: ({ children }) => <p>{renderMarkdownChildren(children, sources, "p", onNavigate)}</p>,
+      li: ({ children }) => <li>{renderMarkdownChildren(children, sources, "li", onNavigate)}</li>,
+      h1: ({ children }) => <h1>{renderMarkdownChildren(children, sources, "h1", onNavigate)}</h1>,
+      h2: ({ children }) => <h2>{renderMarkdownChildren(children, sources, "h2", onNavigate)}</h2>,
+      h3: ({ children }) => <h3>{renderMarkdownChildren(children, sources, "h3", onNavigate)}</h3>,
+      h4: ({ children }) => <h4>{renderMarkdownChildren(children, sources, "h4", onNavigate)}</h4>,
+      td: ({ children }) => <td>{renderMarkdownChildren(children, sources, "td", onNavigate)}</td>,
+      th: ({ children }) => <th>{renderMarkdownChildren(children, sources, "th", onNavigate)}</th>,
+      a: ({ children, ...props }) => (
+        <a {...props} target="_blank" rel="noreferrer">
+          {renderMarkdownChildren(children, sources, "a", onNavigate)}
+        </a>
+      ),
+      table: ({ children }) => (
+        <div className="chat-table-wrap">
+          <table>{children}</table>
+        </div>
+      ),
+    }),
+    [sources, onNavigate],
   );
-  return <div className="chat-markdown">{blocks}</div>;
+
+  return (
+    <div className="chat-markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 // ─── RAG path thinking bar ────────────────────────────────────────────────────
@@ -521,33 +671,33 @@ export default function ChatBot({
   layout?: "desktop" | "mobile";
 }) {
   const {
-    chatMessagesByTopic,
-    chatTraceByTopic,
-    chatSourcesByTopic,
-    addChatMessage,
-    appendToLastAssistant,
+    chatConversationIdByTopic,
+    chatTaskByTopic,
+    chatMessagesByConversation,
     clearChat,
-    appendChatTrace,
-    clearChatTrace,
-    setChatSources,
+    hydrateChatConversation,
+    startChatTask,
+    ensureChatTaskPoll,
+    applyChatStreamEvent,
     selectedArticle,
     setSelectedArticle,
     selectedEventContext,
     setSelectedEventContext,
     isChatLoading,
-    setChatLoading,
     chatOpen,
     setChatOpen,
     activeTopicId,
   } = useStore();
 
-  const chatMessages = chatMessagesByTopic[String(activeTopicId ?? "null")] ?? [];
-  const chatTraces = chatTraceByTopic?.[String(activeTopicId ?? "null")] ?? [];
-  const chatSources = chatSourcesByTopic?.[String(activeTopicId ?? "null")] ?? [];
+  const topicKey = String(activeTopicId ?? "null");
+  const conversationId = chatConversationIdByTopic[topicKey] ?? null;
+  const chatTask = chatTaskByTopic[topicKey] ?? null;
+  const chatMessages = conversationId != null
+    ? (chatMessagesByConversation[String(conversationId)] ?? [])
+    : [];
   const isMobile = layout === "mobile";
 
   const [input, setInput] = useState("");
-  const [chatStatus, setChatStatus] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -558,13 +708,50 @@ export default function ChatBot({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages, chatTraces, chatStatus]);
+  }, [chatMessages, isChatLoading]);
 
   useEffect(() => {
     if (selectedArticle || selectedEventContext) {
       inputRef.current?.focus();
     }
   }, [selectedArticle, selectedEventContext]);
+
+  useEffect(() => {
+    if (!chatOpen) {
+      abortRef.current?.abort();
+      return;
+    }
+    void hydrateChatConversation(activeTopicId);
+  }, [activeTopicId, chatOpen, hydrateChatConversation]);
+
+  useEffect(() => {
+    if (chatTask?.running) ensureChatTaskPoll(activeTopicId);
+  }, [activeTopicId, chatTask?.running, chatTask?.taskId, ensureChatTaskPoll]);
+
+  useEffect(() => {
+    abortRef.current?.abort();
+    if (!chatOpen || conversationId == null || !chatTask?.running) return;
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    void (async () => {
+      try {
+        for await (const event of streamConversation(conversationId, controller.signal)) {
+          if (controller.signal.aborted) break;
+          applyChatStreamEvent(conversationId, event);
+        }
+      } catch (e) {
+        if (!(e instanceof DOMException && e.name === "AbortError")) {
+          // Polling and hydrate will reconcile state if the live stream drops.
+        }
+      } finally {
+        if (abortRef.current === controller) abortRef.current = null;
+      }
+    })();
+
+    return () => controller.abort();
+  }, [chatOpen, conversationId, chatTask?.running, chatTask?.taskId, applyChatStreamEvent]);
 
   const hasContext = !!(selectedArticle || selectedEventContext);
   const contextTitle = selectedEventContext?.title ?? selectedArticle?.title ?? "";
@@ -607,44 +794,16 @@ export default function ChatBot({
     if (!msg || isChatLoading) return;
 
     const ctx = buildContextString();
-    const historyToSend = chatMessages.slice(-20).map((m) => ({
-      role: m.role,
-      content: m.content,
-    }));
-
-    addChatMessage({ id: crypto.randomUUID(), role: "user", content: msg });
     setInput("");
-    clearChatTrace(activeTopicId);
     if (inputRef.current) inputRef.current.style.height = "auto";
-    setChatLoading(true);
-    addChatMessage({ id: crypto.randomUUID(), role: "assistant", content: "" });
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
 
     try {
-      for await (const event of streamChat(msg, ctx, activeTopicId, controller.signal, historyToSend)) {
-        if (controller.signal.aborted) break;
-        if (event.type === "status") {
-          setChatStatus(event.value);
-        } else if (event.type === "trace") {
-          appendChatTrace(activeTopicId, event.value);
-        } else if (event.type === "sources") {
-          setChatSources(activeTopicId, event.value);
-        } else {
-          setChatStatus(null);
-          appendToLastAssistant(event.value);
-        }
-      }
+      abortRef.current?.abort();
+      await startChatTask(msg, ctx);
     } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") { /* intentional */ }
-      else appendToLastAssistant("\n\n*[Error: failed to get response]*");
-    } finally {
-      setChatLoading(false);
-      setChatStatus(null);
-      setSelectedArticle(null);
-      setSelectedEventContext(null);
+      if (!(e instanceof DOMException && e.name === "AbortError")) {
+        setInput(msg);
+      }
     }
   }
 
@@ -674,14 +833,20 @@ export default function ChatBot({
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={clearChat}
+            onClick={() => {
+              abortRef.current?.abort();
+              clearChat();
+            }}
             className="p-1.5 rounded-md text-muted hover:text-foreground hover:bg-surface-hover transition-colors"
             title="Clear chat"
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={() => setChatOpen(false)}
+            onClick={() => {
+              abortRef.current?.abort();
+              setChatOpen(false);
+            }}
             className="p-1.5 rounded-md text-muted hover:text-foreground hover:bg-surface-hover transition-colors"
           >
             <X className="w-3.5 h-3.5" />
@@ -725,7 +890,10 @@ export default function ChatBot({
 
         {chatMessages.map((msg, idx) => {
           const isLastAssistant = idx === lastAssistantIdx;
-          const showTrace = isLastAssistant && (chatTraces.length > 0 || isChatLoading);
+          const messageTrace = msg.trace ?? [];
+          const messageSources = msg.sources ?? [];
+          const assistantText = msg.content || (msg.error ? `Error: ${msg.error}` : "");
+          const showTrace = msg.role === "assistant" && (messageTrace.length > 0 || (isLastAssistant && isChatLoading));
 
           return (
             <div
@@ -742,13 +910,13 @@ export default function ChatBot({
                 {/* Thinking bar — shown above the bubble for last assistant */}
                 {showTrace && (
                   <ThinkingBar
-                    traces={chatTraces}
-                    isLoading={isChatLoading || !!chatStatus}
+                    traces={messageTrace}
+                    isLoading={isLastAssistant && isChatLoading}
                   />
                 )}
 
                 {/* Message bubble */}
-                {msg.content && (
+                {assistantText && (
                   <div
                     className={`rounded-xl px-3 py-2 text-sm leading-relaxed ${
                       msg.role === "user"
@@ -757,7 +925,7 @@ export default function ChatBot({
                     }`}
                   >
                     {msg.role === "assistant" ? (
-                      <ChatRichText content={msg.content} sources={isLastAssistant ? chatSources : []} />
+                      <ChatRichText content={assistantText} sources={messageSources} />
                     ) : (
                       msg.content
                     )}
@@ -781,7 +949,7 @@ export default function ChatBot({
               <Bot className="w-3.5 h-3.5 text-accent" />
             </div>
             <div className="flex-1">
-              <ThinkingBar traces={chatTraces} isLoading />
+              <ThinkingBar traces={[]} isLoading />
             </div>
           </div>
         )}

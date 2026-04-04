@@ -15,7 +15,7 @@ import json
 import re
 from datetime import datetime, timezone
 
-from llm_client import llm_chat, llm_chat_stream
+from llm_client import llm_chat_stream
 from vector_store import search_multi_collection
 from search_client import search as web_search
 from database import (
@@ -149,39 +149,11 @@ def _rule_based_intent(message: str) -> dict:
 def classify_query_intent(message: str, article_context: str | None = None) -> dict:
     """Return an intent dict describing which knowledge layers to activate.
 
-    Uses a small LLM call; falls back to rule-based classification on failure.
+    Interactive chat should not block on a separate planner model call before any
+    progress is visible to the user. We therefore use the lightweight rule-based
+    classifier here and reserve the main LLM call for answer generation.
     """
-    context_parts = [f"Question: {message}"]
-    if article_context:
-        context_parts.append(f"Article context (first 500 chars):\n{article_context[:500]}")
-    try:
-        raw = llm_chat(
-            [
-                {"role": "system", "content": INTENT_PLANNER_SYSTEM},
-                {"role": "user", "content": "\n\n".join(context_parts)},
-            ],
-            temperature=0,
-        )
-        payload = json.loads(raw or "{}")
-        if not isinstance(payload, dict):
-            raise ValueError("not a dict")
-        confidence = float(payload.get("confidence", 0))
-        if confidence < INTENT_CONFIDENCE_FLOOR:
-            return _rule_based_intent(message)
-        try:
-            days = max(3, min(180, int(payload.get("time_window_days", 14))))
-        except Exception:
-            days = 14
-        return {
-            "needs_current_state": bool(payload.get("needs_current_state", True)),
-            "needs_timeline": bool(payload.get("needs_timeline", False)),
-            "needs_archive": bool(payload.get("needs_archive", False)),
-            "time_window_days": days,
-            "reason": str(payload.get("reason", ""))[:160],
-            "confidence": confidence,
-        }
-    except Exception:
-        return _rule_based_intent(message)
+    return _rule_based_intent(message)
 
 
 # ── Retrievers ─────────────────────────────────────────────────────────────────
@@ -405,6 +377,28 @@ def _needs_vector_supplement(current: dict, intent: dict, total_nodes: int = 0) 
     thin_events = len(current.get("active_events", [])) < DB_THIN_EVENT_THRESHOLD
     thin_claims = len(current.get("fresh_claims", [])) < DB_THIN_CLAIM_THRESHOLD
     return thin_events and thin_claims
+
+
+def _has_structured_context(
+    current: dict,
+    timeline: dict | None = None,
+    archive: dict | None = None,
+) -> bool:
+    return any(
+        (
+            current.get("active_events"),
+            current.get("fresh_claims"),
+            current.get("stale_claims"),
+            current.get("snapshot"),
+            current.get("artifact"),
+            timeline and timeline.get("timeline_events"),
+            timeline and timeline.get("deltas"),
+            timeline and timeline.get("claim_evolution"),
+            archive and archive.get("superseded_claims"),
+            archive and archive.get("inactive_claims"),
+            archive and archive.get("old_snapshots"),
+        )
+    )
 
 
 def _run_vector_supplement(
@@ -692,7 +686,14 @@ def chat_stream_with_status(
 
     # ── 4. Supplemental vector search (only when DB is thin) ──────────────────
     vector_supplement_text: str | None = None
-    if topic_id is not None and _needs_vector_supplement(current_data, intent, len(unique_nodes)):
+    has_structured_context = _has_structured_context(current_data, timeline_data, archive_data)
+    should_use_vector_supplement = (
+        topic_id is not None
+        and has_structured_context
+        and _needs_vector_supplement(current_data, intent, len(unique_nodes))
+    )
+
+    if should_use_vector_supplement:
         yield {
             "trace": {
                 "kind": "vector_supplement",
@@ -720,12 +721,13 @@ def chat_stream_with_status(
         }
     else:
         _vec_used = False
+        skip_reason = "no_structured_context" if topic_id is not None and not has_structured_context else "not_needed"
         yield {
             "trace": {
                 "kind": "vector_supplement",
                 "label": "Vector supplement",
                 "state": "skipped",
-                "meta": {"used": False},
+                "meta": {"used": False, "reason": skip_reason},
             }
         }
 

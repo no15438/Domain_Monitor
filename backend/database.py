@@ -89,6 +89,42 @@ def init_db(db_path: str):
             result_summary TEXT DEFAULT '',
             error TEXT DEFAULT ''
         );
+
+        CREATE TABLE IF NOT EXISTS chat_conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            topic_id INTEGER REFERENCES topics(id),
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_conversations_topic_updated
+            ON chat_conversations(topic_id, updated_at DESC);
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id TEXT PRIMARY KEY,
+            conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id),
+            role TEXT NOT NULL,
+            content TEXT DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'done',
+            sources_json TEXT DEFAULT '[]',
+            trace_json TEXT DEFAULT '[]',
+            error TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_created
+            ON chat_messages(conversation_id, created_at ASC);
+
+        CREATE TABLE IF NOT EXISTS chat_tasks (
+            id TEXT PRIMARY KEY,
+            conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id),
+            assistant_message_id TEXT NOT NULL REFERENCES chat_messages(id),
+            status TEXT NOT NULL DEFAULT 'running',
+            started_at TEXT DEFAULT (datetime('now')),
+            finished_at TEXT,
+            error TEXT DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_tasks_conversation_started
+            ON chat_tasks(conversation_id, started_at DESC);
     """)
 
     conn.executescript("""
@@ -518,6 +554,17 @@ def delete_topic(topic_id: int):
             f"fetch-{topic_id}",
         ):
             conn.execute("DELETE FROM task_state WHERE key = ?", (key,))
+        conn.execute(
+            "DELETE FROM chat_tasks WHERE conversation_id IN "
+            "(SELECT id FROM chat_conversations WHERE topic_id = ?)",
+            tid,
+        )
+        conn.execute(
+            "DELETE FROM chat_messages WHERE conversation_id IN "
+            "(SELECT id FROM chat_conversations WHERE topic_id = ?)",
+            tid,
+        )
+        conn.execute("DELETE FROM chat_conversations WHERE topic_id = ?", tid)
         conn.execute("DELETE FROM topics WHERE id = ?", tid)
         conn.commit()
     except Exception:
@@ -2433,6 +2480,361 @@ def task_cleanup_stale(timeout_minutes: int = 30):
            WHERE status='running'
              AND started_at < datetime('now', ?)""",
         (f"-{timeout_minutes} minutes",),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _serialize_chat_message_row(row: sqlite3.Row | dict) -> dict:
+    item = dict(row)
+    item["sources"] = _json_loads(item.pop("sources_json", None), [])
+    item["trace"] = _json_loads(item.pop("trace_json", None), [])
+    item["error"] = item.get("error") or None
+    return item
+
+
+def _serialize_chat_task_row(row: sqlite3.Row | dict) -> dict:
+    item = dict(row)
+    item["error"] = item.get("error") or None
+    item["running"] = item.get("status") == "running"
+    return item
+
+
+def create_chat_conversation(topic_id: int | None) -> int:
+    conn = _conn()
+    cur = conn.execute(
+        """INSERT INTO chat_conversations (topic_id, created_at, updated_at)
+           VALUES (?, datetime('now'), datetime('now'))""",
+        (topic_id,),
+    )
+    conn.commit()
+    conversation_id = int(cur.lastrowid)
+    conn.close()
+    return conversation_id
+
+
+def touch_chat_conversation(conversation_id: int):
+    conn = _conn()
+    conn.execute(
+        "UPDATE chat_conversations SET updated_at = datetime('now') WHERE id = ?",
+        (conversation_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_chat_conversation(conversation_id: int) -> dict | None:
+    conn = _conn()
+    row = conn.execute(
+        "SELECT * FROM chat_conversations WHERE id = ?",
+        (conversation_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_latest_chat_conversation_for_topic(topic_id: int | None) -> dict | None:
+    conn = _conn()
+    if topic_id is None:
+        row = conn.execute(
+            """SELECT * FROM chat_conversations
+               WHERE topic_id IS NULL
+               ORDER BY updated_at DESC, created_at DESC
+               LIMIT 1"""
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """SELECT * FROM chat_conversations
+               WHERE topic_id = ?
+               ORDER BY updated_at DESC, created_at DESC
+               LIMIT 1""",
+            (topic_id,),
+        ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def create_chat_message(
+    conversation_id: int,
+    role: str,
+    content: str = "",
+    status: str = "done",
+    sources: list[dict] | None = None,
+    trace: list[dict] | None = None,
+    error: str = "",
+    message_id: str | None = None,
+) -> dict:
+    chat_message_id = message_id or str(uuid.uuid4())
+    conn = _conn()
+    conn.execute(
+        """INSERT INTO chat_messages
+           (id, conversation_id, role, content, status, sources_json, trace_json, error, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
+        (
+            chat_message_id,
+            conversation_id,
+            role,
+            content,
+            status,
+            _json_dumps(sources or []),
+            _json_dumps(trace or []),
+            error,
+        ),
+    )
+    conn.execute(
+        "UPDATE chat_conversations SET updated_at = datetime('now') WHERE id = ?",
+        (conversation_id,),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM chat_messages WHERE id = ?",
+        (chat_message_id,),
+    ).fetchone()
+    conn.close()
+    return _serialize_chat_message_row(row)
+
+
+def get_chat_message(message_id: str) -> dict | None:
+    conn = _conn()
+    row = conn.execute(
+        "SELECT * FROM chat_messages WHERE id = ?",
+        (message_id,),
+    ).fetchone()
+    conn.close()
+    return _serialize_chat_message_row(row) if row else None
+
+
+def list_chat_messages(conversation_id: int) -> list[dict]:
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT * FROM chat_messages
+           WHERE conversation_id = ?
+           ORDER BY created_at ASC, rowid ASC""",
+        (conversation_id,),
+    ).fetchall()
+    conn.close()
+    return [_serialize_chat_message_row(row) for row in rows]
+
+
+def update_chat_message(
+    message_id: str,
+    *,
+    content: str | None = None,
+    append_content: str | None = None,
+    status: str | None = None,
+    sources: list[dict] | None = None,
+    trace: list[dict] | None = None,
+    error: str | None = None,
+):
+    fields: list[str] = []
+    values: list = []
+    if content is not None:
+        fields.append("content = ?")
+        values.append(content)
+    if append_content is not None:
+        fields.append("content = COALESCE(content, '') || ?")
+        values.append(append_content)
+    if status is not None:
+        fields.append("status = ?")
+        values.append(status)
+    if sources is not None:
+        fields.append("sources_json = ?")
+        values.append(_json_dumps(sources))
+    if trace is not None:
+        fields.append("trace_json = ?")
+        values.append(_json_dumps(trace))
+    if error is not None:
+        fields.append("error = ?")
+        values.append(error)
+    if not fields:
+        return
+    fields.append("updated_at = datetime('now')")
+
+    conn = _conn()
+    conn.execute(
+        f"UPDATE chat_messages SET {', '.join(fields)} WHERE id = ?",
+        (*values, message_id),
+    )
+    conn.execute(
+        """UPDATE chat_conversations
+           SET updated_at = datetime('now')
+           WHERE id = (SELECT conversation_id FROM chat_messages WHERE id = ?)""",
+        (message_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def create_chat_task(conversation_id: int, assistant_message_id: str) -> dict:
+    task_id = str(uuid.uuid4())
+    conn = _conn()
+    conn.execute(
+        """INSERT INTO chat_tasks
+           (id, conversation_id, assistant_message_id, status, started_at, finished_at, error)
+           VALUES (?, ?, ?, 'running', datetime('now'), NULL, '')""",
+        (task_id, conversation_id, assistant_message_id),
+    )
+    conn.execute(
+        "UPDATE chat_conversations SET updated_at = datetime('now') WHERE id = ?",
+        (conversation_id,),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM chat_tasks WHERE id = ?",
+        (task_id,),
+    ).fetchone()
+    conn.close()
+    return _serialize_chat_task_row(row)
+
+
+def get_chat_task(task_id: str) -> dict | None:
+    conn = _conn()
+    row = conn.execute(
+        "SELECT * FROM chat_tasks WHERE id = ?",
+        (task_id,),
+    ).fetchone()
+    conn.close()
+    return _serialize_chat_task_row(row) if row else None
+
+
+def get_latest_chat_task_for_conversation(conversation_id: int) -> dict | None:
+    conn = _conn()
+    row = conn.execute(
+        """SELECT * FROM chat_tasks
+           WHERE conversation_id = ?
+           ORDER BY CASE WHEN status = 'running' THEN 0 ELSE 1 END,
+                    started_at DESC,
+                    id DESC
+           LIMIT 1""",
+        (conversation_id,),
+    ).fetchone()
+    conn.close()
+    return _serialize_chat_task_row(row) if row else None
+
+
+def update_chat_task(task_id: str, *, status: str | None = None, error: str | None = None):
+    fields: list[str] = []
+    values: list = []
+    if status is not None:
+        fields.append("status = ?")
+        values.append(status)
+        if status in ("done", "error"):
+            fields.append("finished_at = datetime('now')")
+        elif status == "running":
+            fields.append("finished_at = NULL")
+    if error is not None:
+        fields.append("error = ?")
+        values.append(error)
+    if not fields:
+        return
+
+    conn = _conn()
+    conn.execute(
+        f"UPDATE chat_tasks SET {', '.join(fields)} WHERE id = ?",
+        (*values, task_id),
+    )
+    conn.execute(
+        """UPDATE chat_conversations
+           SET updated_at = datetime('now')
+           WHERE id = (SELECT conversation_id FROM chat_tasks WHERE id = ?)""",
+        (task_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_chat_conversation_payload(conversation_id: int) -> dict | None:
+    conversation = get_chat_conversation(conversation_id)
+    if not conversation:
+        return None
+    return {
+        "conversation": conversation,
+        "messages": list_chat_messages(conversation_id),
+        "task": get_latest_chat_task_for_conversation(conversation_id),
+    }
+
+
+def get_latest_chat_conversation_payload_for_topic(topic_id: int | None) -> dict | None:
+    conversation = get_latest_chat_conversation_for_topic(topic_id)
+    if not conversation:
+        return None
+    return get_chat_conversation_payload(conversation["id"])
+
+
+def chat_cleanup_stale(timeout_minutes: int = 30):
+    conn = _conn()
+    timeout_expr = f"-{timeout_minutes} minutes"
+    conn.execute(
+        """UPDATE chat_tasks
+           SET status = 'error',
+               finished_at = datetime('now'),
+               error = CASE
+                   WHEN COALESCE(error, '') = '' THEN 'generation interrupted'
+                   ELSE error
+               END
+           WHERE status = 'running'
+             AND started_at < datetime('now', ?)""",
+        (timeout_expr,),
+    )
+    conn.execute(
+        """UPDATE chat_messages
+           SET status = 'error',
+               updated_at = datetime('now'),
+               error = CASE
+                   WHEN COALESCE(error, '') = '' THEN 'generation interrupted'
+                   ELSE error
+               END
+           WHERE status = 'running'
+             AND updated_at < datetime('now', ?)""",
+        (timeout_expr,),
+    )
+    conn.execute(
+        """UPDATE chat_conversations
+           SET updated_at = datetime('now')
+           WHERE id IN (
+               SELECT conversation_id FROM chat_messages
+               WHERE status = 'error' AND updated_at >= datetime('now', '-1 minute')
+           )"""
+    )
+    conn.commit()
+    conn.close()
+
+
+def chat_recover_interrupted_tasks():
+    """Mark any running chat tasks/messages as interrupted on process startup.
+
+    Chat generation runs in-process. After a restart there is no worker left that
+    could still complete these records, so keeping them as "running" would cause
+    the UI to spin forever after refresh.
+    """
+    conn = _conn()
+    conn.execute(
+        """UPDATE chat_tasks
+           SET status = 'error',
+               finished_at = datetime('now'),
+               error = CASE
+                   WHEN COALESCE(error, '') = '' THEN 'generation interrupted by server restart'
+                   ELSE error
+               END
+           WHERE status = 'running'"""
+    )
+    conn.execute(
+        """UPDATE chat_messages
+           SET status = 'error',
+               updated_at = datetime('now'),
+               error = CASE
+                   WHEN COALESCE(error, '') = '' THEN 'generation interrupted by server restart'
+                   ELSE error
+               END
+           WHERE status = 'running'"""
+    )
+    conn.execute(
+        """UPDATE chat_conversations
+           SET updated_at = datetime('now')
+           WHERE id IN (
+               SELECT conversation_id FROM chat_messages
+               WHERE status = 'error' AND error = 'generation interrupted by server restart'
+           )"""
     )
     conn.commit()
     conn.close()

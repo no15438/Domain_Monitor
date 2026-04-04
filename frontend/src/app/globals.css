@@ -77,6 +77,38 @@ body {
   padding-left: 1.25em;
   margin-bottom: 0.5em;
 }
+.chat-markdown .chat-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  margin-bottom: 0.75em;
+}
+.chat-markdown table {
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  border: 1px solid color-mix(in srgb, var(--foreground) 22%, var(--border));
+  border-radius: 6px;
+  overflow: hidden;
+}
+.chat-markdown th,
+.chat-markdown td {
+  padding: 0.4em 0.55em;
+  border: 1px solid color-mix(in srgb, var(--foreground) 18%, var(--border));
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.55;
+}
+.chat-markdown th {
+  color: var(--foreground);
+  font-weight: 600;
+  background: color-mix(in srgb, var(--surface-hover) 60%, transparent);
+}
+.chat-markdown td {
+  color: var(--foreground);
+}
+.chat-markdown tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--surface-hover) 25%, transparent);
+}
 .chat-markdown code {
   background: var(--surface);
   padding: 0.125em 0.375em;

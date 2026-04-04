@@ -67,6 +67,7 @@ def llm_chat(
     messages: list[dict],
     temperature: float = 0.3,
     response_format: dict | None = None,
+    timeout: float | None = None,
 ) -> str:
     """Call the LLM and return the response text.
 
@@ -80,6 +81,8 @@ def llm_chat(
         kwargs: dict = {"model": _model(), "messages": messages, "temperature": temperature}
         if response_format is not None:
             kwargs["response_format"] = response_format
+        if timeout is not None:
+            kwargs["timeout"] = timeout
         resp = client.chat.completions.create(**kwargs)
         return _strip_thinking(resp.choices[0].message.content or "")
 
@@ -103,7 +106,11 @@ def llm_chat(
     return ""
 
 
-def llm_chat_stream(messages: list[dict], temperature: float = 0.5):
+def llm_chat_stream(
+    messages: list[dict],
+    temperature: float = 0.5,
+    timeout: float | None = None,
+):
     """Yields text chunks, filtering out <think>…</think> blocks."""
     client = _get_client()
     provider = settings.llm_provider
@@ -135,9 +142,15 @@ def llm_chat_stream(messages: list[dict], temperature: float = 0.5):
             yield buf
 
     if provider in ("openai", "lmstudio", "openai_compat", "dashscope"):
-        stream = client.chat.completions.create(
-            model=_model(), messages=messages, temperature=temperature, stream=True
-        )
+        kwargs: dict = {
+            "model": _model(),
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        stream = client.chat.completions.create(**kwargs)
 
         def _raw():
             for chunk in stream:

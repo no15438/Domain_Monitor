@@ -170,6 +170,65 @@ export interface ChatHistoryMessage {
   content: string;
 }
 
+export type ChatMessageStatus = "pending" | "running" | "done" | "error";
+
+export interface ChatConversation {
+  id: number;
+  topic_id: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatConversationMessage {
+  id: string;
+  conversation_id: number;
+  role: "user" | "assistant";
+  content: string;
+  status: ChatMessageStatus;
+  sources: ChatSource[];
+  trace: ChatTracePayload[];
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatTaskStatus {
+  id: string;
+  conversation_id: number;
+  assistant_message_id: string;
+  status: "running" | "done" | "error";
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+  running: boolean;
+}
+
+export interface ChatConversationPayload {
+  conversation: ChatConversation | null;
+  messages: ChatConversationMessage[];
+  task: ChatTaskStatus | null;
+}
+
+export interface ChatTaskCreateResponse {
+  conversation_id: number;
+  task_id: string;
+  user_message_id: string;
+  assistant_message_id: string;
+}
+
+export type ConversationStreamEvent = {
+  conversation_id: number;
+  assistant_message_id: string;
+  status?: string;
+  content?: string;
+  trace?: ChatTracePayload;
+  sources?: ChatSource[];
+  message_status?: ChatMessageStatus;
+  task_status?: ChatTaskStatus["status"];
+  error?: string;
+  done?: boolean;
+};
+
 export interface Snapshot {
   id: number;
   topic_id: number;
