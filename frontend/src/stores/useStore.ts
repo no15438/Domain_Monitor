@@ -926,9 +926,12 @@ export const useStore = create<AppState>()(
     const nextTask = get().chatTaskByTopic[chatTopicKey(id)] ?? null;
     set({
       activeTopicId: id,
+      articles: [],
       highlightedEventId: null,
       selectedKnowledgeEventId: null,
       selectedKnowledgeEventTitle: null,
+      selectedArticle: null,
+      selectedEventContext: null,
       isChatLoading: !!nextTask?.running,
     });
   },

@@ -91,6 +91,21 @@ export default function EventFeed({
   // Fetch active articles — re-fetch when event filter changes
   useEffect(() => {
     let cancelled = false;
+    if (activeTopicId == null) {
+      setArticles([]);
+      setArchivedArticles([]);
+      setArchivedCount(0);
+      setActiveTotal(0);
+      setLoadedActiveCount(0);
+      setLoading(false);
+      setError(null);
+      setLoadMoreError(null);
+      setLoadingMore(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     setLoading(true);
     setError(null);
     setLoadMoreError(null);
@@ -116,7 +131,7 @@ export default function EventFeed({
   }, [activeTopicId, sortMode, reloadKey, selectedKnowledgeEventId, setArticles]);
 
   const loadMoreArticles = useCallback(async () => {
-    if (loading || loadingMore || !hasMoreActive) return;
+    if (activeTopicId == null || loading || loadingMore || !hasMoreActive) return;
 
     const offset = loadedActiveCount;
     setLoadingMore(true);
@@ -185,6 +200,10 @@ export default function EventFeed({
 
   // Fetch archived count
   useEffect(() => {
+    if (activeTopicId == null) {
+      setArchivedCount(0);
+      return;
+    }
     let cancelled = false;
     fetchArticles(1, 0, activeTopicId, sortMode, "archived", selectedKnowledgeEventId)
       .then((data) => { if (!cancelled) setArchivedCount(data.total); })
@@ -194,6 +213,10 @@ export default function EventFeed({
 
   // Load archived items when expanded
   useEffect(() => {
+    if (activeTopicId == null) {
+      setArchivedArticles([]);
+      return;
+    }
     if (!showArchived) return;
     let cancelled = false;
     fetchArticles(50, 0, activeTopicId, sortMode, "archived", selectedKnowledgeEventId)
@@ -205,7 +228,7 @@ export default function EventFeed({
   // SSE: structured delta → update articles store + signal new events for evolution
   useEffect(() => {
     // Don't prepend SSE articles when viewing a filtered event — avoids stale data appearing
-    if (selectedKnowledgeEventId) {
+    if (selectedKnowledgeEventId || activeTopicId == null) {
       setSseState("closed");
       return;
     }
