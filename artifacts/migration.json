@@ -1,0 +1,36 @@
+{
+  "from_preserved_snapshot": "/Users/no15438/Documents/Codex/2026-11-17/task/Domain_Monitor_EventKB",
+  "base_commit": "2529f3f023a0a411c3b749d462eb9e29f610a826",
+  "files": [
+    {
+      "source": "/Users/no15438/Documents/Codex/2026-11-17/task/Domain_Monitor_EventKB/eventkb/store.py",
+      "target": "eventkb/store.py",
+      "sha256": "292ff609e329cdac8bf35a2611073d7ad7caf053bb4dfa547a6e4f7c660a4cad"
+    },
+    {
+      "source": "/Users/no15438/Documents/Codex/2026-11-17/task/Domain_Monitor_EventKB/eventkb/server.py",
+      "target": "eventkb/server.py",
+      "sha256": "0beac99c9990ae59dea5566de2fa6b9ab60a27ad732801976ec2390cdf821435"
+    },
+    {
+      "source": "/Users/no15438/Documents/Codex/2026-11-17/task/Domain_Monitor_EventKB/eventkb/__init__.py",
+      "target": "eventkb/__init__.py",
+      "sha256": "20ac70bbf56c39764187f060cc84ece39f41a75e10d163216927558588be9b33"
+    },
+    {
+      "source": "/Users/no15438/Documents/Codex/2026-11-17/task/Domain_Monitor_EventKB/eventkb/demo.py",
+      "target": "eventkb/demo.py",
+      "sha256": "dff9b75fdf3d853cdb3bacbf858816fee5c1aa5f824ee8a4da28e4016c158057"
+    },
+    {
+      "source": "/Users/no15438/Documents/Codex/2026-11-17/task/Domain_Monitor_EventKB/eventkb/__main__.py",
+      "target": "eventkb/__main__.py",
+      "sha256": "3453e0f732f9bc0801b6569934cebb063cd54906f893662aa0280b25a7307653"
+    },
+    {
+      "source": "/Users/no15438/Documents/Codex/2026-11-17/task/Domain_Monitor_EventKB/web/index.html",
+      "target": "web/index.html",
+      "sha256": "40febe9e0d99b90dd7acbe4152dc029b20d04c5292ae34109dea59fa99b5a503"
+    }
+  ]
+}

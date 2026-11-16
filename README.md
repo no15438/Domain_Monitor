@@ -1,5 +1,7 @@
 # Domain Monitor — AI-Powered Industry Intelligence
 
+> Event memory refactor (offline phase 1): see [EVENT_MEMORY.md](EVENT_MEMORY.md) for the new evidence-backed event model, current/history isolation, synthetic demo and startup commands. The legacy runtime described below is preserved; it is not yet wired to the new event store. See [BRANCH_MANAGEMENT.md](BRANCH_MANAGEMENT.md) for the branch audit.
+
 Real-time industry monitoring system powered by AI. Automatically fetches, deduplicates, clusters, summarizes, and categorizes industry news from multiple sources. Builds a structured, time-aware knowledge base over time, and exposes it through an AI chatbot that uses a multi-layer RAG pipeline to answer questions with full temporal awareness.
 
 ---

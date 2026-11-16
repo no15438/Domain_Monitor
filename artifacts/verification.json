@@ -1,0 +1,43 @@
+{
+  "fix_commit": "2529f3f023a0a411c3b749d462eb9e29f610a826",
+  "fix_push": {
+    "remote": "https://github.com/no15438/Domain_Monitor.git",
+    "branch": "feat/render-blueprint-deploy",
+    "verified_tip": "2529f3f023a0a411c3b749d462eb9e29f610a826",
+    "new_commits": 1,
+    "files": [
+      "frontend/src/components/EventFeed.tsx",
+      "frontend/src/stores/useStore.ts"
+    ],
+    "force": false
+  },
+  "original_readme_and_data_sha256_unchanged": true,
+  "refactor_branch": "feat/event-memory-v1",
+  "refactor_pushed": false,
+  "tests": {
+    "unittest": "20 passed, including 3 legacy-risk reproductions and loopback HTTP API",
+    "frontend_harness": "passed on original working tree before fix commit and on new worktree after checkout",
+    "typescript_full_project": "NOT COMPLETED: no output for approximately six minutes with 0% CPU; terminated exact process; no pass claimed",
+    "browser": "passed: current completed vs January announced; conflict retains both sources; archive disappears from default list; include_archived recalls; restore summary; reset returns completed. Found and fixed form reset name shadowing during visual QA."
+  },
+  "project_registration": {
+    "success": false,
+    "create_worktree": "Cloud worktrees are unavailable.",
+    "attach_worktree": "Cloud worktrees are unavailable.",
+    "native_ui": "Computer Use is not allowed to use com.openai.codex for safety reasons.",
+    "list_projects": "new directory absent"
+  },
+  "worktree_checkout": {
+    "normal_checkout": "twice failed with mmap failed: Operation canceled; Git automatically cleaned failed worktrees",
+    "recovered": "git worktree add --no-checkout; read loose Git objects without mmap; verified blob SHA1 and 102 file contents; git read-tree HEAD; clean tracked baseline before implementation"
+  },
+  "not_implemented": [
+    "legacy FastAPI/Next.js integration",
+    "production migration",
+    "automatic extraction and event identity matching",
+    "partial interval corrections, retraction semantics",
+    "automatic Markdown refresh",
+    "scalable paging and entity alias review"
+  ],
+  "costs": "No model calls, document uploads, deployment or refactor push. Only the specifically authorized fix commit was pushed to GitHub."
+}

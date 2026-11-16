@@ -25,3 +25,11 @@ frontend/out/
 # OS
 .DS_Store
 Thumbs.db
+
+# Offline event memory (generated locally; never publish real evidence)
+data/
+memory/
+*.sqlite*
+*.log
+.venv/
+.pytest_cache/

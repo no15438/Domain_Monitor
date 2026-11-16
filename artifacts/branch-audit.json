@@ -1,0 +1,130 @@
+{
+  "repository": "/Users/no15438/Desktop/Domain_Monitor",
+  "current": "feat/render-blueprint-deploy",
+  "worktrees": "worktree /Users/no15438/Desktop/Domain_Monitor\nHEAD 2529f3f023a0a411c3b749d462eb9e29f610a826\nbranch refs/heads/feat/render-blueprint-deploy\n\nworktree /Users/no15438/Documents/Codex/2026-11-17/task/Domain_Monitor_EventMemory\nHEAD 2529f3f023a0a411c3b749d462eb9e29f610a826\nbranch refs/heads/feat/event-memory-v1",
+  "remote_heads": "2529f3f023a0a411c3b749d462eb9e29f610a826\trefs/heads/feat/render-blueprint-deploy\nd7ac7ad48fd967381c1d86c0801126ca8f54656c\trefs/heads/main",
+  "branches": [
+    {
+      "ref": "refs/heads/deploy",
+      "head": "47b094947b1ac7c95a40c66654e9e8b8e0af2e5c",
+      "upstream": null,
+      "date": "2026-04-04 20:50:56 +1100",
+      "subject": "feat: persist chat state and fix markdown table rendering",
+      "main": {
+        "ahead_behind": "6\t0",
+        "unique_commits": "47b0949 2026-04-04T20:50:56+11:00 feat: persist chat state and fix markdown table rendering\nb35561f 2026-04-04T13:53:45+11:00 fix: align OpenAI-compatible model routing\n6cdbd3d 2026-04-04T01:14:37+11:00 merge: bring mobile topic workspace updates into deploy\n9088d31 2026-04-04T01:14:37+11:00 feat: improve topic workspace mobile experience\nf89e5d3 2026-04-04T00:11:25+11:00 fix: use Render-friendly frontend start command\nfb22929 2026-04-03T23:58:56+11:00 feat: add Render blueprint deployment option"
+      },
+      "feat/render-blueprint-deploy": {
+        "ahead_behind": "0\t1",
+        "unique_commits": ""
+      }
+    },
+    {
+      "ref": "refs/heads/feat/event-memory-v1",
+      "head": "2529f3f023a0a411c3b749d462eb9e29f610a826",
+      "upstream": null,
+      "date": "2026-11-17 06:04:45 +1100",
+      "subject": "fix: clear stale topic articles and selected context",
+      "main": {
+        "ahead_behind": "7\t0",
+        "unique_commits": "2529f3f 2026-11-17T06:04:45+11:00 fix: clear stale topic articles and selected context\n47b0949 2026-04-04T20:50:56+11:00 feat: persist chat state and fix markdown table rendering\nb35561f 2026-04-04T13:53:45+11:00 fix: align OpenAI-compatible model routing\n6cdbd3d 2026-04-04T01:14:37+11:00 merge: bring mobile topic workspace updates into deploy\n9088d31 2026-04-04T01:14:37+11:00 feat: improve topic workspace mobile experience\nf89e5d3 2026-04-04T00:11:25+11:00 fix: use Render-friendly frontend start command\nfb22929 2026-04-03T23:58:56+11:00 feat: add Render blueprint deployment option"
+      },
+      "feat/render-blueprint-deploy": {
+        "ahead_behind": "0\t0",
+        "unique_commits": ""
+      }
+    },
+    {
+      "ref": "refs/heads/feat/knowledge-lineage-refactor",
+      "head": "1015e51ec5e03f684cdb015b8f78cdabd5127b7a",
+      "upstream": null,
+      "date": "2026-04-02 00:48:51 +1100",
+      "subject": "feat: knowledge lineage refactor (chatbot, pipeline, API, UI, README)",
+      "main": {
+        "ahead_behind": "0\t2",
+        "unique_commits": ""
+      },
+      "feat/render-blueprint-deploy": {
+        "ahead_behind": "0\t9",
+        "unique_commits": ""
+      }
+    },
+    {
+      "ref": "refs/heads/feat/render-blueprint-deploy",
+      "head": "2529f3f023a0a411c3b749d462eb9e29f610a826",
+      "upstream": "origin/feat/render-blueprint-deploy",
+      "date": "2026-11-17 06:04:45 +1100",
+      "subject": "fix: clear stale topic articles and selected context",
+      "main": {
+        "ahead_behind": "7\t0",
+        "unique_commits": "2529f3f 2026-11-17T06:04:45+11:00 fix: clear stale topic articles and selected context\n47b0949 2026-04-04T20:50:56+11:00 feat: persist chat state and fix markdown table rendering\nb35561f 2026-04-04T13:53:45+11:00 fix: align OpenAI-compatible model routing\n6cdbd3d 2026-04-04T01:14:37+11:00 merge: bring mobile topic workspace updates into deploy\n9088d31 2026-04-04T01:14:37+11:00 feat: improve topic workspace mobile experience\nf89e5d3 2026-04-04T00:11:25+11:00 fix: use Render-friendly frontend start command\nfb22929 2026-04-03T23:58:56+11:00 feat: add Render blueprint deployment option"
+      },
+      "feat/render-blueprint-deploy": {
+        "ahead_behind": "0\t0",
+        "unique_commits": ""
+      },
+      "upstream_ahead_behind": "0\t0"
+    },
+    {
+      "ref": "refs/heads/feat/topic-mobile-research-news-20260404",
+      "head": "9088d317004a3f9b02664da110289365b475f8c3",
+      "upstream": null,
+      "date": "2026-04-04 01:14:37 +1100",
+      "subject": "feat: improve topic workspace mobile experience",
+      "main": {
+        "ahead_behind": "3\t0",
+        "unique_commits": "9088d31 2026-04-04T01:14:37+11:00 feat: improve topic workspace mobile experience\nf89e5d3 2026-04-04T00:11:25+11:00 fix: use Render-friendly frontend start command\nfb22929 2026-04-03T23:58:56+11:00 feat: add Render blueprint deployment option"
+      },
+      "feat/render-blueprint-deploy": {
+        "ahead_behind": "0\t4",
+        "unique_commits": ""
+      }
+    },
+    {
+      "ref": "refs/heads/main",
+      "head": "d7ac7ad48fd967381c1d86c0801126ca8f54656c",
+      "upstream": "origin/main",
+      "date": "2026-04-03 21:18:47 +1100",
+      "subject": "feat: add Docker Compose deployment setup",
+      "main": {
+        "ahead_behind": "0\t0",
+        "unique_commits": ""
+      },
+      "feat/render-blueprint-deploy": {
+        "ahead_behind": "0\t7",
+        "unique_commits": ""
+      },
+      "upstream_ahead_behind": "0\t0"
+    },
+    {
+      "ref": "refs/remotes/origin/feat/render-blueprint-deploy",
+      "head": "2529f3f023a0a411c3b749d462eb9e29f610a826",
+      "upstream": null,
+      "date": "2026-11-17 06:04:45 +1100",
+      "subject": "fix: clear stale topic articles and selected context",
+      "main": {
+        "ahead_behind": "7\t0",
+        "unique_commits": "2529f3f 2026-11-17T06:04:45+11:00 fix: clear stale topic articles and selected context\n47b0949 2026-04-04T20:50:56+11:00 feat: persist chat state and fix markdown table rendering\nb35561f 2026-04-04T13:53:45+11:00 fix: align OpenAI-compatible model routing\n6cdbd3d 2026-04-04T01:14:37+11:00 merge: bring mobile topic workspace updates into deploy\n9088d31 2026-04-04T01:14:37+11:00 feat: improve topic workspace mobile experience\nf89e5d3 2026-04-04T00:11:25+11:00 fix: use Render-friendly frontend start command\nfb22929 2026-04-03T23:58:56+11:00 feat: add Render blueprint deployment option"
+      },
+      "feat/render-blueprint-deploy": {
+        "ahead_behind": "0\t0",
+        "unique_commits": ""
+      }
+    },
+    {
+      "ref": "refs/remotes/origin/main",
+      "head": "d7ac7ad48fd967381c1d86c0801126ca8f54656c",
+      "upstream": null,
+      "date": "2026-04-03 21:18:47 +1100",
+      "subject": "feat: add Docker Compose deployment setup",
+      "main": {
+        "ahead_behind": "0\t0",
+        "unique_commits": ""
+      },
+      "feat/render-blueprint-deploy": {
+        "ahead_behind": "0\t7",
+        "unique_commits": ""
+      }
+    }
+  ]
+}
