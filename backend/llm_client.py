@@ -5,6 +5,21 @@ from config import settings
 _client = None
 
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
+ENGLISH_OUTPUT_POLICY = (
+    "Write all generated prose, summaries, labels, tags, and analytical text in English, "
+    "regardless of the language of the user or source material. Preserve required JSON "
+    "keys, enum values, identifiers, URLs, and verbatim source quotations."
+)
+
+
+def _english_messages(messages: list[dict]) -> list[dict]:
+    """Apply the product language without changing the caller's conversation."""
+    copied = [dict(message) for message in messages]
+    systems = [message["content"] for message in copied if message["role"] == "system"]
+    system = "\n\n".join([*systems, ENGLISH_OUTPUT_POLICY])
+    return [{"role": "system", "content": system}, *[
+        message for message in copied if message["role"] != "system"
+    ]]
 
 
 def configuration_issue():
@@ -17,7 +32,7 @@ def configuration_issue():
         "lmstudio": (settings.lmstudio_base_url, settings.lmstudio_model),
     }
     if provider not in required or not all(str(value or "").strip() for value in required[provider]):
-        return "AI 服务尚未配置完整，请先设置模型服务后再生成或对话。"
+        return "AI is not fully configured. Configure a model provider before generating content or chatting."
     return None
 
 
@@ -93,6 +108,7 @@ def llm_chat(
     """
     client = _get_client()
     provider = settings.llm_provider
+    messages = _english_messages(messages)
 
     if provider in ("openai", "lmstudio", "openai_compat", "dashscope"):
         kwargs: dict = {"model": _model(), "messages": messages, "temperature": temperature}
@@ -131,6 +147,7 @@ def llm_chat_stream(
     """Yields text chunks, filtering out <think>…</think> blocks."""
     client = _get_client()
     provider = settings.llm_provider
+    messages = _english_messages(messages)
 
     def _filter_thinking(raw_stream):
         """Buffer while inside <think> tags, yield everything after."""

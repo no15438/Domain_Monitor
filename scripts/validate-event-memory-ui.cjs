@@ -79,7 +79,7 @@ const Page = load('frontend/src/app/event-memory/page.tsx', {
   assert.match(text(), /Event one/);
   assert.doesNotMatch(text(), /Event two/); // Late response cannot replace the latest scope.
 
-  const reason = rendered.root.findByProps({ placeholder: '说明为何保留、降权或归档' });
+  const reason = rendered.root.findByProps({ placeholder: 'Explain why to retain, downweight, or archive' });
   await act(async () => reason.props.onChange({ target: { value: 'Synthetic review' } }));
   let pendingSave;
   await act(async () => { pendingSave = rendered.root.findAllByType('form')[1].props.onSubmit({ preventDefault() {} }); });
@@ -91,13 +91,13 @@ const Page = load('frontend/src/app/event-memory/page.tsx', {
   assert.equal(topicSelect().props.value, 'two');
   assert.match(text(), /Event two/);
   assert.doesNotMatch(text(), /Event one/);
-  assert.doesNotMatch(text(), /记忆策略已保存/); // Completion from an unmounted detail stays silent.
+  assert.doesNotMatch(text(), /Memory policy saved/); // Completion from an unmounted detail stays silent.
 
   const date = rendered.root.findAllByProps({ type: 'datetime-local' })[0];
   await act(async () => date.props.onInput({ currentTarget: { value: '2026-01-15T12:00' } }));
   await act(async () => rendered.root.findAllByType('form')[0].props.onSubmit({ preventDefault() {} }));
   assert.ok(queries.at(-1).url.searchParams.get('valid_at'));
-  assert.match(text(), /历史视图/);
+  assert.match(text(), /Historical view/);
   assert.equal(rendered.root.findByType('fieldset').props.disabled, true);
   assert.equal(api.safeEvidenceUrl('javascript:alert(1)'), undefined);
   await act(async () => rendered.unmount());

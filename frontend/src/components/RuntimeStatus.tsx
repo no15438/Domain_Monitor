@@ -11,8 +11,8 @@ export default function RuntimeStatus() {
       .then(response => response.ok ? response.json() : null)
       .then(data => {
         if (!data || controller.signal.aborted) return;
-        if (!data.external_calls_enabled) setMessage("本地模式：话题、资料和事件记忆可用。新闻采集与 AI 生成功能尚未启用。");
-        else if (!data.model_configured) setMessage("AI 服务尚未配置。设置模型服务后，可使用生成与对话功能。");
+        if (!data.external_calls_enabled) setMessage("Local mode: topics, documents, and event memory are available. News collection and AI generation are not enabled.");
+        else if (!data.model_configured) setMessage("AI is not configured. Configure a model provider to enable generation and chat.");
       }).catch(() => { /* The page provides its own connection error and retry. */ });
     return () => controller.abort();
   }, []);

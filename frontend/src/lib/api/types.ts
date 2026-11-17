@@ -360,7 +360,7 @@ export interface CachedSummary {
   citations?: AnalysisCitation[];
 }
 
-// ── Event cluster (聚类事件实体) ──────────────────────────
+// ── Event cluster (cluster entity) ──────────────────────────
 // Returned by /api/events. Represents a cluster of articles about the same event,
 // backed by events_v2 (when available) joined with the canonical article.
 

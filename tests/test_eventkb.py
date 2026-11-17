@@ -193,7 +193,7 @@ class HTTPCase(unittest.TestCase):
                 with urlopen(request,timeout=5) as r:return r.status,json.load(r)
             try:
                 self.assertTrue(call('/health')[1]['ok'])
-                with urlopen(base,timeout=5) as response:self.assertIn('事件记忆实验室',response.read().decode())
+                with urlopen(base,timeout=5) as response:self.assertIn('Event Memory Lab',response.read().decode())
                 call('/api/events',dict(event_id='http',topic='test',identity_key='http',title='HTTP synthetic'))
                 ev=call('/api/evidence',dict(source_key='http',revision='1',publisher='Synthetic',url='https://example.invalid/http',published_at=JAN,body='Synthetic HTTP evidence'))[1]
                 call('/api/events/http/assertions',dict(field='status',value='completed',valid_from=JAN,evidence_id=ev['id'],message_key='http'))
@@ -217,11 +217,11 @@ class HTTPCase(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store=Store(Path(tmp)/'demo.sqlite3')
             self.assertTrue(seed(store)['synthetic'])
-            count=len(store.history('acquisition-demo')['assertions'])
+            count=len(store.history('acquisition-demo-en')['assertions'])
             seed(store)
-            self.assertEqual(len(store.history('acquisition-demo')['assertions']),count)
-            self.assertEqual(store.state('acquisition-demo')['fields']['status']['value'],'completed')
-            self.assertTrue(store.state('rumour-demo')['has_conflicts'])
+            self.assertEqual(len(store.history('acquisition-demo-en')['assertions']),count)
+            self.assertEqual(store.state('acquisition-demo-en')['fields']['status']['value'],'completed')
+            self.assertTrue(store.state('rumour-demo-en')['has_conflicts'])
 
 
 if __name__ == '__main__':

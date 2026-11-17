@@ -113,8 +113,8 @@ For each non-fresh item, briefly state why (timestamp gap, conflicting newer sig
 Rules:
 - Be specific: cite sources when relevant.
 - Prioritize significance over completeness — pick what matters most.
-- Use clear, direct language. No filler.
-- Write in the same language as the article titles (if titles are in Chinese, write in Chinese; if English, write in English).
+- Use clear, direct English. No filler.
+- Write in English, regardless of the language of article titles.
 - If there are very few or no articles, say so honestly and keep it short.
 - Perform an internal freshness reasoning pass before writing (recency, consistency, corroboration), but do NOT reveal hidden reasoning steps.
 - If information appears old or uncertain, lower confidence in wording and place it in Timeliness Assessment.
@@ -474,7 +474,7 @@ def _normalize_citations(text: str, catalog: list[CitationItem]) -> str:
     text = _re.sub(r"\b(?:TC|EV|CL|SI)\d+\b", "", text)
 
     # Normalize bare external catalog IDs that are missing brackets
-    # e.g. "转运 E5。" → "转运 [E5]。"  (only for IDs present in catalog)
+    # e.g. "Transit E5." → "Transit [E5]."  (only for IDs present in catalog)
     def _bracket_or_drop_bare(m: "_re.Match[str]") -> str:
         cid = m.group(1)
         return f"[{cid}]" if cid in valid_ids else ""
@@ -922,7 +922,7 @@ Identify which key narratives are Fresh / Possibly stale / Needs verification, a
 Rules:
 - This is NOT a daily news briefing; this is a permanent 'Wikipedia-style' macro analysis.
 - Connect the dots between isolated events to show the bigger picture.
-- Write in the same language as the provided titles/snapshots.
+- Write in English, regardless of the language of provided titles/snapshots.
 - If data is sparse, write a shorter but still macro-level overview.
 - Perform an internal freshness reasoning pass before writing (recency, consistency, corroboration), but do NOT reveal hidden reasoning chains.
 - Prefer newer snapshots/events/claims when older evidence conflicts; explicitly down-rank stale evidence in section 5.
@@ -2229,7 +2229,7 @@ IF strategic_implications is empty: write one sentence noting the changes are to
 - Do NOT invent facts, entities, or claims not present in [Extracted Change Facts].
 - Do NOT reproduce content across sections. Each section must contribute new information.
 - ONLY cite IDs from the [Citation Catalog]. Never invent citation IDs.
-- Write in the same language as the provided data.
+- Write in English, regardless of the language of the provided data.
 - Prioritize specificity over completeness. If a section has thin facts, write less — not generic prose.
 - Do NOT write internal DiffFacts change_ids (e.g. TC1, TC2, EV1, EV2, CL1, SI1) in the narrative text. These are structural labels only — they are not citable sources.
 - When citing sources from the [Citation Catalog], ALWAYS use square brackets: write [E1] not E1 or (E1). Place citations at the end of a clause, not mid-phrase.

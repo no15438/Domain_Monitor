@@ -200,7 +200,7 @@ export default function Home() {
           <p className="text-[11px] text-muted">AI-powered industry intelligence</p>
         </div>
         <div className="flex-1" />
-        <Link href="/event-memory" prefetch={false} className="text-sm text-accent hover:underline">事件记忆</Link>
+        <Link href="/event-memory" prefetch={false} className="text-sm text-accent hover:underline">Event Memory</Link>
         <ThemeToggle />
       </header>
 

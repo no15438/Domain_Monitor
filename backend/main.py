@@ -373,7 +373,7 @@ def _generate_research_plan_sync(topic_id: int, prompt: str) -> None:
         '  "sector_scope": ["Sector1", "Sector2", ...]  // relevant industries/sectors\n'
         "}\n"
         "IMPORTANT:\n"
-        "- Use the SAME LANGUAGE as the user's prompt for all text fields\n"
+        "- Write all generated text fields in English, even when the user prompt is in another language\n"
         "- RSS feeds must be real, publicly accessible URLs from major news outlets, specialized journals, or Google News RSS\n"
         "- For Google News RSS, format as: https://news.google.com/rss/search?q=QUERY&hl=LANG\n"
         "- Keywords should be concise but precise enough for news search\n"
@@ -488,7 +488,7 @@ async def external_service_boundary(request: Request, call_next):
     model_action = generation or path in ("/api/chat", "/api/chat/tasks", "/api/admin/regen-event-titles")
     if request.method == "POST" and (model_action or path == "/api/fetch-now"):
         if not settings.external_calls_enabled:
-            return JSONResponse({"detail": "本地模式尚未启用新闻采集和 AI 服务。话题、资料与事件记忆仍可使用。"}, status_code=503)
+            return JSONResponse({"detail": "News collection and AI are not enabled in local mode. Topics, documents, and event memory remain available."}, status_code=503)
         if model_action:
             from llm_client import configuration_issue
             issue = configuration_issue()

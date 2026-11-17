@@ -16,20 +16,20 @@ vm.runInNewContext(code, {exports:moduleValue.exports, module:moduleValue, proce
   setTimeout:resolve=>resolve(), console,
   require:()=>({useStore:{getState:()=>({addToast:(message,level)=>toasts.push({message,level})})}})});
 const {fetchWithRetry,safeJson}=moduleValue.exports;
-const unavailable=()=>new Response(JSON.stringify({detail:'本地模式尚未启用 AI 服务'}),{status:503,headers:{'content-type':'application/json'}});
+const unavailable=()=>new Response(JSON.stringify({detail:'AI is not enabled in local mode'}),{status:503,headers:{'content-type':'application/json'}});
 (async()=>{
   handler=unavailable;
   const result=await fetchWithRetry('/api/chat/tasks',{method:'POST'});
   assert.equal(calls,1,'Mutating actions must never retry automatically');
   const error=await safeJson(result,{status:'error',message:'Fallback'});
-  assert.match(error.message,/本地模式/);
-  assert.match(toasts[0].message,/本地模式/);
+  assert.match(error.message,/local mode/);
+  assert.match(toasts[0].message,/local mode/);
   calls=0;
   handler=()=>calls===1?unavailable():new Response('{}',{status:200});
   assert.equal((await fetchWithRetry('/api/topics')).status,200);
   assert.equal(calls,2);
   calls=0;handler=unavailable;
-  await assert.rejects(()=>fetchWithRetry('/api/topics'),/本地模式/);
+  await assert.rejects(()=>fetchWithRetry('/api/topics'),/local mode/);
   assert.equal(calls,3,'Exhausted reads must report failure instead of an empty topic list');
   calls=0;handler=()=>{throw Error('Connection lost');};
   await assert.rejects(()=>fetchWithRetry('/api/chat/tasks',{method:'POST'}),/Connection lost/);

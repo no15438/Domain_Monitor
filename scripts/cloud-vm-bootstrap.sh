@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 # Domain Monitor — cloud VM bootstrap (Ubuntu 22.04+)
 #
-# === 0) 你在云控制台完成（本脚本无法代操作）===
-# - 创建虚拟机：Ubuntu 22.04/24.04 LTS，建议 2 vCPU / 4GB RAM / 40GB+ 盘
-# - 安全组入站：TCP 22（SSH）、TCP 3000（前端）
-# - 不要对公网开放 8000（后端仅容器内访问，由前端代理 /api）
-# - 用 SSH 登录到机器后，再执行本脚本（需在仓库根目录）
+# === 0) Complete in the cloud console before running this script===
+# - Create a VM: Ubuntu 22.04/24.04 LTS; recommended 2 vCPU / 4 GB RAM / 40 GB+ disk
+# - Allow inbound TCP 22 (SSH) and TCP 3000 (frontend)
+# - Keep port 8000 private; the frontend proxies /api to the backend container
+# - Connect over SSH, then run this script from the repository root
 #
-# === 1) 私有仓库 clone（在运行本脚本之前）===
-# 推荐：GitHub 仓库 Settings → Deploy keys → 添加只读 SSH 公钥，然后：
+# === 1) Clone the private repository before running this script===
+# Recommended: add a read-only SSH public key in GitHub Settings → Deploy keys, then:
 #   git clone git@github.com:<owner>/Domain_Monitor.git && cd Domain_Monitor
-# 或 HTTPS + PAT（注意 token 安全）：
+# Or use HTTPS with a PAT (keep tokens private):
 #   git clone https://github.com/<owner>/Domain_Monitor.git && cd Domain_Monitor
 #
-# === 2) 运行 ===
+# === 2) Run ===
 #   chmod +x scripts/cloud-vm-bootstrap.sh
 #   ./scripts/cloud-vm-bootstrap.sh
 #
-# 若首次安装 Docker 后提示无权限，请 exit 重新 SSH 登录，再执行一次本脚本。
+# If Docker reports permission errors after installation, reconnect over SSH and run the script again.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

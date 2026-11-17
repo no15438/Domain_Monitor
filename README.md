@@ -339,8 +339,8 @@ The intent classifier is the routing brain of the pipeline. It runs a small, fas
 
 If confidence < 0.40 or the LLM call fails, it falls back to a rule-based classifier using regex keyword matching (English and Chinese):
 
-- Timeline keywords: `evolv`, `trend`, `changed`, `over time`, `变化`, `演变`, …
-- Archive keywords: `history`, `origin`, `before`, `previous`, `历史`, `以前`, …
+- Timeline keywords: `evolv`, `trend`, `changed`, `over time`, plus Chinese equivalents
+- Archive keywords: `history`, `origin`, `before`, `previous`, plus Chinese equivalents
 
 ### Why DB-First, Not Vector-First
 
@@ -516,17 +516,17 @@ Copy `backend/.env.example` to `backend/.env` and fill in the values you need.
 
 | Variable | Description | Default |
 |---|---|---|
-| `LLM_PROVIDER` | `openai` \| `anthropic` \| `lmstudio`（本机）\| `openai_compat`（第三方 OpenAI 兼容，如 ichonhui）\| `dashscope` | `openai` |
+| `LLM_PROVIDER` | `openai` \| `anthropic` \| `lmstudio` (local)\| `openai_compat` (third-party OpenAI-compatible gateway)\| `dashscope` | `openai` |
 | `OPENAI_API_KEY` | OpenAI API key | — |
 | `OPENAI_MODEL` | OpenAI model name | `gpt-4o-mini` |
 | `ANTHROPIC_API_KEY` | Anthropic API key | — |
 | `ANTHROPIC_MODEL` | Anthropic model name | `claude-3-5-haiku-20241022` |
-| `LMSTUDIO_BASE_URL` | 本机 LM Studio OpenAI 兼容 base（请求 `{URL}/chat/completions`） | `http://localhost:1234/v1` |
-| `LMSTUDIO_MODEL` | LM Studio 模型 id | `local-model` |
-| `LMSTUDIO_API_KEY` | LM Studio 用占位 key 即可 | `lm-studio` |
-| `OPENAI_COMPAT_BASE_URL` | 第三方 OpenAI 兼容网关 base（如 ichonhui；非 LM Studio） | — |
-| `OPENAI_COMPAT_MODEL` | 与网关 `GET /v1/models` 中 `id` 一致 | — |
-| `OPENAI_COMPAT_API_KEY` | 网关 Bearer；可空则使用内置占位 | — |
+| `LMSTUDIO_BASE_URL` | Local LM Studio OpenAI-compatible base URL (`{URL}/chat/completions`) | `http://localhost:1234/v1` |
+| `LMSTUDIO_MODEL` | LM Studio model ID | `local-model` |
+| `LMSTUDIO_API_KEY` | Placeholder key for LM Studio | `lm-studio` |
+| `OPENAI_COMPAT_BASE_URL` | Third-party OpenAI-compatible gateway base URL | — |
+| `OPENAI_COMPAT_MODEL` | Model ID from the gateway's `GET /v1/models` response | — |
+| `OPENAI_COMPAT_API_KEY` | Gateway bearer key; blank uses a built-in placeholder | — |
 | `DASHSCOPE_API_KEY` | Alibaba Cloud DashScope API key | — |
 | `DASHSCOPE_MODEL` | DashScope model name | `qwen3.5-flash` |
 | `DASHSCOPE_BASE_URL` | DashScope endpoint | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |

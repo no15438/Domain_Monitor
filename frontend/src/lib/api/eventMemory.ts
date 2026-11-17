@@ -17,7 +17,7 @@ const base = `${process.env.NEXT_PUBLIC_API_BASE?.trim().replace(/\/$/, "") || "
 export async function eventRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(`${base}${path}`, { ...options, cache: "no-store" });
   if (!response.ok) {
-    let detail = `请求失败（${response.status}）`;
+    let detail = `Request failed (${response.status})`;
     try { const data = await response.json(); if (typeof data.detail === "string") detail = data.detail; } catch { /* Use status fallback. */ }
     throw new Error(detail);
   }

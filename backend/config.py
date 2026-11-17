@@ -2,16 +2,16 @@ from pathlib import Path
 import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from typing import Optional
 
-# 始终从 backend/ 目录加载 .env，避免从仓库根目录启动 uvicorn 时读不到 backend/.env
+# Resolve configuration from backend/ even when starting from the repository root.
 _BACKEND_DIR = Path(__file__).resolve().parent
 _ROOT = _BACKEND_DIR.parent
 
 
 class Settings(BaseSettings):
-    # "openai" | "anthropic" | "lmstudio" (本机) | "openai_compat" (第三方 OpenAI 兼容网关，如 ichonhui) | "dashscope"
+    # "openai" | "anthropic" | "lmstudio" (local) | "openai_compat" (third-party OpenAI-compatible gateway) | "dashscope"
     llm_provider: str = "openai"
 
     openai_api_key: Optional[str] = None
@@ -24,16 +24,16 @@ class Settings(BaseSettings):
     lmstudio_model: str = "local-model"
     lmstudio_api_key: str = "lm-studio"
 
-    # 第三方 OpenAI 兼容 HTTP API（非 LM Studio）：如 https://llm.ichonhui.com/.../v1
+    # Third-party OpenAI-compatible HTTP API, e.g. https://llm.ichonhui.com/.../v1
     openai_compat_base_url: str = ""
     openai_compat_model: str = ""
     openai_compat_api_key: str = ""
 
     # Alibaba Cloud DashScope (OpenAI-compatible)
     dashscope_api_key: Optional[str] = None
-    dashscope_model: str = "qwen3.5-flash"  # qwen3.5-flash (推荐) | qwen3.5-plus | qwen-turbo | qwen-max
-    # 中国大陆: https://dashscope.aliyuncs.com/compatible-mode/v1
-    # 国际区:   https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    dashscope_model: str = "qwen3.5-flash"  # qwen3.5-flash (recommended) | qwen3.5-plus | qwen-turbo | qwen-max
+    # Mainland China: https://dashscope.aliyuncs.com/compatible-mode/v1
+    # International:   https://dashscope-intl.aliyuncs.com/compatible-mode/v1
     dashscope_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 
     tavily_api_key: Optional[str] = None
@@ -56,10 +56,12 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
-    # Local opt-in adapter. Requires the repository root on PYTHONPATH.
+    # Event adapter. Public deployments explicitly allow their own hostname.
     event_memory_enabled: bool = False
     event_memory_database_path: str = "data/eventkb.sqlite3"
-    event_memory_hosts: str = "localhost,127.0.0.1,backend,testserver"
+    event_memory_hosts: str = Field(default_factory=lambda: ",".join(filter(None, [
+        "localhost", "127.0.0.1", "backend", "testserver", os.getenv("RENDER_EXTERNAL_HOSTNAME")
+    ])))
     scheduler_enabled: bool = False
     external_calls_enabled: bool = True
 

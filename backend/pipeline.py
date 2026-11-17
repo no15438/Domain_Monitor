@@ -89,18 +89,18 @@ Research Angles:
 
 Return a JSON array of exactly {n} objects, one per article, in the SAME ORDER as listed above.
 Each object must have:
-- "summary": 1-2 sentence summary, max 120 chars, same language as article
-- "tags": array of 2-5 topic tags, same language as article
+- "summary": 1-2 sentence summary, max 120 chars, in English
+- "tags": array of 2-5 topic tags, in English
 - "sentiment": "positive" | "negative" | "neutral" — from this research direction's perspective
 - "importance": integer 1-10 (10 = directly addresses a key research angle)
 - "topic_relevance": float 0.0-1.0
 - "signal_type": short plain-language label for the evidence signal, e.g. "market signal", "policy signal", "capacity signal"
 - "key_entities": array of up to 5 relevant entities
-- "topic_analysis": 1 sentence on how the article relates to the research, same language
+- "topic_analysis": 1 sentence on how the article relates to the research, in English
 - "claims": array of 2-4 key analytical claims extracted from this article. Each claim must have:
     - "kind": "observation" | "forecast" | "trend" | "structural"
-    - "statement": a concise, self-contained claim sentence (max 160 chars), same language as article
-    - "summary": 1 sentence expanding on the statement (max 160 chars), same language as article
+    - "statement": a concise, self-contained claim sentence (max 160 chars), in English
+    - "summary": 1 sentence expanding on the statement (max 160 chars), in English
   Rules for claims:
   - Cover different analytical angles — do NOT repeat the same point with different words
   - At least one "observation" (what happened) and one forward-looking kind ("forecast" or "trend") when the article supports it
@@ -131,12 +131,12 @@ Each object must have:
 - "event_summary": 2-3 sentences synthesizing key facts across ALL sources in this cluster
 
 Rules for event_title:
-- Use ≤20 words. Write in the same language as the source articles.
+- Use ≤20 words. Write in English, regardless of the source language.
 - Describe the event as a standalone fact, NOT a headline copy.
-- Do NOT include any source/outlet/media name (e.g. do not append "- 凤凰网汽车" or "- Reuters").
-- Do NOT start with phrases like "报道：" or "媒体称：".
-- Good example: "美国封堵中国电动汽车经加拿大转运入境路径"
-- Bad example:  "绝无可能进入美国市场！美驻加拿大大使表态严防借道入美 - 凤凰网汽车"
+- Do NOT include any source/outlet/media name (e.g. do not append "- Reuters").
+- Do NOT start with phrases like "Report:" or "Media says:".
+- Good example: "US restricts Chinese electric vehicle imports through Canada"
+- Bad example: "No chance! Ambassador warns against importing vehicles through Canada - Reuters"
 
 Return ONLY a valid JSON array. No markdown fences, no explanation."""
 

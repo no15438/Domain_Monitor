@@ -86,7 +86,7 @@ data as if it were current.
 for key facts — do NOT reference generic section names like [Current Claims], \
 [Active Events], [Recent Evolution], [CURRENT STATE], [SUPPLEMENTAL], or internal \
 system labels. Never invent titles; only use exact titles from the context provided.
-5. ALWAYS respond in the same language as the user's question."""
+5. ALWAYS respond in English, even when the question is in another language."""
 
 INTENT_PLANNER_SYSTEM = """You are a query intent classifier for a domain-monitoring \
 knowledge system.
@@ -614,18 +614,18 @@ def chat_stream_with_status(
             nodes.append({"id": f"claim:{cl['id']}", "type": "claim", "title": cl['statement'], "status": "stale"})
         if current_data.get("snapshot"):
             snap = current_data["snapshot"]
-            nodes.append({"id": f"snapshot:{snap['id']}", "type": "snapshot", "title": "最新分析快照", "status": "active"})
+            nodes.append({"id": f"snapshot:{snap['id']}", "type": "snapshot", "title": "Latest analysis snapshot", "status": "active"})
         if current_data.get("artifact"):
             art = current_data["artifact"]
-            nodes.append({"id": f"artifact:{art['id']}", "type": "artifact", "title": "全局概览", "status": "active"})
+            nodes.append({"id": f"artifact:{art['id']}", "type": "artifact", "title": "Global overview", "status": "active"})
     
     if timeline_data:
         for ev in timeline_data.get("timeline_events", []):
             nodes.append({"id": f"event:{ev['id']}", "type": "event", "title": ev['title'], "status": "timeline"})
         for d in timeline_data.get("deltas", []):
-            nodes.append({"id": f"delta:{d['id']}", "type": "snapshot", "title": "快照增量", "status": "timeline"})
+            nodes.append({"id": f"delta:{d['id']}", "type": "snapshot", "title": "Snapshot delta", "status": "timeline"})
         for e in timeline_data.get("claim_evolution", []):
-            nodes.append({"id": f"evo:{e['id']}", "type": "claim", "title": e.get('reason', '')[:50] or "判断演化", "status": "timeline"})
+            nodes.append({"id": f"evo:{e['id']}", "type": "claim", "title": e.get('reason', '')[:50] or "Claim history", "status": "timeline"})
             
     if archive_data:
         for cl in archive_data.get("superseded_claims", []):

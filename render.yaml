@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: domain-monitor-backend-no15438
+    name: Domain_Monitor
     runtime: docker
     plan: free
     rootDir: .
@@ -43,9 +43,13 @@ services:
       - key: EVENT_MEMORY_DATABASE_PATH
         value: /tmp/domain-monitor/eventkb.sqlite3
       - key: EVENT_MEMORY_HOSTS
-        value: localhost,127.0.0.1,domain-monitor-backend-no15438.onrender.com
+        value: localhost,127.0.0.1,domain-monitor-uf81.onrender.com
       - key: CORS_ORIGINS
         value: https://domain-monitor-frontend-no15438.onrender.com,http://localhost:3000
+      - key: EXTERNAL_CALLS_ENABLED
+        value: "false"
+      - key: SCHEDULER_ENABLED
+        value: "false"
       - key: LOG_LEVEL
         value: INFO
 
@@ -63,6 +67,6 @@ services:
       - key: HOSTNAME
         value: 0.0.0.0
       - key: INTERNAL_API_BASE
-        value: https://domain-monitor-backend-no15438.onrender.com
+        value: https://domain-monitor-uf81.onrender.com
       - key: NEXT_PUBLIC_API_BASE
         value: ""
