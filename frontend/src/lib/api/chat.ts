@@ -1,4 +1,5 @@
 import { BASE, fetchWithRetry, safeJson } from "./shared";
+import type { MemoryScope } from "./workflow";
 import type {
   ChatConversationPayload,
   ChatEvent,
@@ -25,6 +26,7 @@ export async function createChatTask(
   articleContext?: string,
   topicId?: number | null,
   conversationId?: number | null,
+  memoryScope?: MemoryScope | null,
 ): Promise<ChatTaskCreateResponse> {
   const res = await fetchWithRetry(`${BASE}/api/chat/tasks`, {
     method: "POST",
@@ -34,6 +36,9 @@ export async function createChatTask(
       article_context: articleContext,
       topic_id: topicId ?? null,
       conversation_id: conversationId ?? null,
+      event_id: memoryScope?.event_id,
+      valid_at: memoryScope?.valid_at,
+      known_at: memoryScope?.known_at,
     }),
   });
   return parseActionResponse(

@@ -6,9 +6,9 @@ import re
 import threading
 import urllib.parse
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -207,11 +207,15 @@ def _run_chat_task_sync(
     article_context: str | None,
     topic_id: int | None,
     history: list[dict],
+    event_id: str | None = None,
+    valid_at: str | None = None,
+    known_at: str | None = None,
 ):
     traces: list[dict] = []
     sources: list[dict] = []
     try:
-        for item in chat_stream_with_status(message, article_context, topic_id, history):
+        scope = {k: v for k, v in dict(event_id=event_id, valid_at=valid_at, known_at=known_at).items() if v is not None}
+        for item in chat_stream_with_status(message, article_context, topic_id, history, **scope):
             if isinstance(item, dict):
                 if item.get("status"):
                     _notify_chat_stream(
@@ -322,6 +326,9 @@ async def _run_chat_task_background(
     article_context: str | None,
     topic_id: int | None,
     history: list[dict],
+    event_id: str | None = None,
+    valid_at: str | None = None,
+    known_at: str | None = None,
 ):
     await asyncio.to_thread(
         _run_chat_task_sync,
@@ -332,6 +339,9 @@ async def _run_chat_task_background(
         article_context=article_context,
         topic_id=topic_id,
         history=history,
+        event_id=event_id,
+        valid_at=valid_at,
+        known_at=known_at,
     )
 
 
@@ -1095,6 +1105,25 @@ async def api_restore_article(article_id: str):
 # ── AI Topic Summary ─────────────────────────────────
 
 
+def _memory_report_status(topic_id: int, captured: dict, label: str = "briefing") -> dict:
+    if not settings.event_memory_enabled:
+        return {"event_memory_stale": False, "event_memory_notice": None}
+    from topic_summary import _memory_briefing
+    current = _memory_briefing(topic_id) or {}
+
+    def signature(events):
+        return json.dumps(sorted(
+            [{"id": state["event"]["id"], "fields": state["fields"]} for state in events],
+            key=lambda row: row["id"]), sort_keys=True)
+
+    if "event_memory_inputs" not in captured:
+        return {"event_memory_stale": True,
+                "event_memory_notice": f"Legacy {label} — regenerate to include event memory."}
+    stale = signature(captured.get("event_memory_inputs", [])) != signature(current.get("events", []))
+    return {"event_memory_stale": stale,
+            "event_memory_notice": f"Event evidence changed after this {label}. Regenerate to include the current projection." if stale else None}
+
+
 @app.get("/api/topics/{topic_id}/ai-summary")
 async def api_topic_ai_summary(topic_id: int):
     """Return latest temporal snapshot. Returns null content if none exists yet."""
@@ -1115,6 +1144,7 @@ async def api_topic_ai_summary(topic_id: int):
             "snapshot_id": snap["id"],
             "stats_metadata": stats_metadata,
             "citations": parsed_stats.get("citations", []),
+            **await asyncio.to_thread(_memory_report_status, topic_id, parsed_stats),
         }
     return {
         "content": None,
@@ -1130,6 +1160,91 @@ async def _require_topic(topic_id: int) -> None:
     topics = await asyncio.to_thread(get_topics)
     if not any(t["id"] == topic_id for t in topics):
         raise HTTPException(404, f"Topic {topic_id} not found")
+
+
+def _memory_boundary(request: Request, response: Response):
+    if not settings.event_memory_enabled:
+        raise HTTPException(503, "Event memory is not enabled.")
+    from eventkb.api import boundary
+    boundary(request, response)
+
+
+def _memory_invoke(method, *args, **kwargs):
+    try:
+        return method(*args, **kwargs)
+    except KeyError:
+        raise HTTPException(404, "Record not found in this topic.") from None
+    except (ValueError, TypeError) as exc:
+        code = 409 if str(exc).startswith("Stale review:") else 400
+        raise HTTPException(code, str(exc)) from None
+
+
+def _workflow():
+    from event_workflow import get_workflow
+    return get_workflow()
+
+
+class MemoryReviewReq(BaseModel):
+    model_config = {"extra": "forbid"}
+    action: Literal["accept", "reject", "defer"]
+    reason: str = Field(min_length=1, max_length=2000)
+    developer: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=200)
+    version: str | None = Field(default=None, max_length=100)
+    status: Literal["announced", "available", "withdrawn"] | None = None
+    valid_from: str | None = Field(default=None, max_length=60)
+    valid_to: str | None = Field(default=None, max_length=60)
+    quote: str | None = Field(default=None, max_length=10000)
+    event_id: str | None = Field(default=None, max_length=100)
+    relation: Literal["observation", "transition", "correction"] | None = None
+    target_id: str | None = Field(default=None, max_length=100)
+    expected_version: str | None = Field(default=None, max_length=200)
+
+
+@app.get("/api/topics/{topic_id}/memory/updates", dependencies=[Depends(_memory_boundary)])
+async def memory_updates(topic_id: int, q: str = Query(default="", max_length=400),
+                         limit: int = Query(default=50, ge=1, le=100),
+                         valid_at: str | None = None, known_at: str | None = None):
+    await _require_topic(topic_id)
+    return await asyncio.to_thread(_memory_invoke, _workflow().list_updates, topic_id,
+                                   q=q, limit=limit, valid_at=valid_at, known_at=known_at)
+
+
+@app.get("/api/topics/{topic_id}/memory/events/{event_id}", dependencies=[Depends(_memory_boundary)])
+async def memory_event(topic_id: int, event_id: str,
+                       valid_at: str | None = None, known_at: str | None = None):
+    await _require_topic(topic_id)
+    return await asyncio.to_thread(_memory_invoke, _workflow().event_detail, topic_id, event_id,
+                                   valid_at=valid_at, known_at=known_at)
+
+
+@app.get("/api/topics/{topic_id}/memory/candidates", dependencies=[Depends(_memory_boundary)])
+async def memory_candidates(topic_id: int):
+    await _require_topic(topic_id)
+    return {"candidates": await asyncio.to_thread(_memory_invoke, _workflow().list_candidates, topic_id)}
+
+
+@app.post("/api/topics/{topic_id}/memory/candidates/{candidate_id}/review", dependencies=[Depends(_memory_boundary)])
+async def memory_review(topic_id: int, candidate_id: str, body: MemoryReviewReq):
+    await _require_topic(topic_id)
+    return await asyncio.to_thread(_memory_invoke, _workflow().review_candidate, topic_id, candidate_id,
+                                   **body.model_dump(exclude_unset=True))
+
+
+async def _validate_chat_scope(req):
+    if not any((req.event_id, req.valid_at, req.known_at)):
+        return
+    if req.topic_id is None:
+        raise HTTPException(400, "A topic is required for an event or historical question.")
+    if not settings.event_memory_enabled:
+        raise HTTPException(503, "Event memory is not enabled.")
+    from eventkb.store import timestamp
+    for value in (req.valid_at, req.known_at):
+        if value:
+            _memory_invoke(timestamp, value)
+    if req.event_id:
+        await asyncio.to_thread(_memory_invoke, _workflow().event_detail, req.topic_id, req.event_id,
+                               valid_at=req.valid_at, known_at=req.known_at)
 
 
 @app.post("/api/topics/{topic_id}/ai-summary/generate")
@@ -1164,7 +1279,8 @@ async def api_topic_global_overview(topic_id: int):
     citations = []
     if artifact and isinstance(artifact.get("metadata"), dict):
         citations = artifact["metadata"].get("citations", [])
-    return {"content": content, "citations": citations}
+    freshness = (await asyncio.to_thread(_memory_report_status, topic_id, artifact.get("metadata") or {}, "overview")) if artifact else {}
+    return {"content": content, "citations": citations, **freshness}
 
 
 @app.post("/api/topics/{topic_id}/global-overview/generate")
@@ -1194,6 +1310,8 @@ async def api_global_overview_status(topic_id: int):
 @app.get("/api/topics/{topic_id}/synthesis/global-overview")
 async def api_synthesis_global_overview(topic_id: int):
     artifact = await asyncio.to_thread(get_synthesis_artifact, topic_id, "global_overview")
+    if artifact:
+        artifact = {**artifact, **await asyncio.to_thread(_memory_report_status, topic_id, artifact.get("metadata") or {}, "overview")}
     return {"artifact": artifact}
 
 
@@ -1254,14 +1372,20 @@ class ChatHistoryMessage(BaseModel):
     content: str
 
 
-class ChatReq(BaseModel):
+class ChatScope(BaseModel):
+    event_id: str | None = Field(default=None, min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
+    valid_at: str | None = Field(default=None, max_length=60)
+    known_at: str | None = Field(default=None, max_length=60)
+
+
+class ChatReq(ChatScope):
     message: str = Field(..., min_length=1, max_length=4000)
     article_context: str | None = None
     topic_id: int | None = None
     history: list[ChatHistoryMessage] = Field(default_factory=list)
 
 
-class ChatTaskReq(BaseModel):
+class ChatTaskReq(ChatScope):
     message: str = Field(..., min_length=1, max_length=4000)
     article_context: str | None = None
     topic_id: int | None = None
@@ -1272,6 +1396,7 @@ class ChatTaskReq(BaseModel):
 async def chat_task_start(req: ChatTaskReq):
     if req.topic_id is not None:
         await _require_topic(req.topic_id)
+    await _validate_chat_scope(req)
 
     conversation_id = req.conversation_id
     payload = None
@@ -1320,6 +1445,9 @@ async def chat_task_start(req: ChatTaskReq):
             article_context=req.article_context,
             topic_id=req.topic_id,
             history=history,
+            event_id=req.event_id,
+            valid_at=req.valid_at,
+            known_at=req.known_at,
         )
     )
     return {
@@ -1393,9 +1521,14 @@ async def chat_conversation_stream(conversation_id: int, request: Request):
 
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatReq):
+    if req.topic_id is not None:
+        await _require_topic(req.topic_id)
+    await _validate_chat_scope(req)
+
     def generate():
         history_dicts = [{"role": m.role, "content": m.content} for m in req.history]
-        for item in chat_stream_with_status(req.message, req.article_context, req.topic_id, history_dicts):
+        scope = {k: v for k, v in dict(event_id=req.event_id, valid_at=req.valid_at, known_at=req.known_at).items() if v is not None}
+        for item in chat_stream_with_status(req.message, req.article_context, req.topic_id, history_dicts, **scope):
             if isinstance(item, dict):
                 yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
             else:

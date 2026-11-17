@@ -190,9 +190,10 @@ class TestLoadEvolutionFactBundle:
         bundle = _load_evolution_fact_bundle(88)
         assert len(bundle.new_events) >= 1, "Should have at least 1 new event (ev2)"
 
-    def test_resolved_events_populated(self):
+    def test_report_departures_are_not_business_resolutions(self):
         bundle = _load_evolution_fact_bundle(88)
-        assert len(bundle.resolved_events) >= 1, "Should have at least 1 resolved event (ev1)"
+        assert len(bundle.left_report_events) >= 1, "Event ev1 left the limited snapshot selection"
+        assert not bundle.resolved_events, "Snapshot membership alone cannot establish resolution"
 
     def test_new_claims_populated(self):
         bundle = _load_evolution_fact_bundle(88)

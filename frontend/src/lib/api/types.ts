@@ -157,6 +157,18 @@ export interface ChatSource {
   title: string;
   url: string;
   type: "event" | "snapshot" | "artifact" | "web" | string;
+  quote?: string;
+  evidence_id?: string;
+  event_id?: string;
+  revision?: string;
+  publisher?: string;
+  published_at?: string;
+  recorded_at?: string;
+  assertion_ids?: string[];
+  valid_from?: string;
+  support_status?: string;
+  start?: number;
+  end?: number;
 }
 
 export type ChatEvent =
@@ -338,6 +350,8 @@ export interface SynthesisArtifact {
   status: string;
   version: number;
   generated_at: string;
+  event_memory_stale?: boolean;
+  event_memory_notice?: string | null;
   metadata?: {
     citations?: AnalysisCitation[];
     [key: string]: unknown;
@@ -358,6 +372,8 @@ export interface CachedSummary {
   snapshot_id?: number | null;
   stats_metadata?: string | null;
   citations?: AnalysisCitation[];
+  event_memory_stale?: boolean;
+  event_memory_notice?: string | null;
 }
 
 // ── Event cluster (cluster entity) ──────────────────────────

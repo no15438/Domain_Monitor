@@ -26,6 +26,17 @@ def _normalize(text: str) -> str:
     return _NON_ALNUM.sub("", text).lower().strip()
 
 
+def _different_numeric_anchors(a: str, b: str) -> bool:
+    """Keep differing versions/dates/quantities for downstream identity review.
+
+    A cheap similarity pass may propose duplicates; it must not discard the
+    very numbers that distinguish a new release or an important correction.
+    """
+    left = set(re.findall(r"\d+(?:\.\d+)*", a))
+    right = set(re.findall(r"\d+(?:\.\d+)*", b))
+    return bool(left and right and left != right)
+
+
 # ── Authority map ─────────────────────────────────────
 # Domain -> score (0.0 – 1.0).  Higher = more authoritative.
 # Covers major international + Chinese sources.
@@ -72,9 +83,7 @@ DEFAULT_AUTHORITY = 0.30
 _TRACKING_PARAMS = frozenset({
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "utm_id", "utm_reader", "utm_name", "utm_cid",
-    "ref", "referrer", "from", "via", "source",
     "fbclid", "gclid", "msclkid", "yclid", "_ga",
-    "share", "share_token", "cid", "ncid", "icid",
 })
 
 _AMP_RE = re.compile(r"/amp(/|$)", re.IGNORECASE)
@@ -92,11 +101,15 @@ def normalize_url(url: str) -> str:
     try:
         p = urlparse(url.strip())
         host = (p.hostname or "").lower()
+        if ":" in host:
+            host = f"[{host}]"
         if host.startswith("www."):
             host = host[4:]
+        if p.port is not None:
+            host += f":{p.port}"
         path = _AMP_RE.sub("/", p.path).rstrip("/") or "/"
-        qs = {k: v for k, v in parse_qs(p.query).items()
-              if k.lower() not in _TRACKING_PARAMS}
+        qs = {k: v for k, v in parse_qs(p.query, keep_blank_values=True).items()
+              if k.lower() not in _TRACKING_PARAMS and not k.lower().startswith("utm_")}
         query = urlencode(qs, doseq=True)
         return urlunparse((p.scheme.lower(), host, path, "", query, ""))
     except Exception:
@@ -193,6 +206,8 @@ def dedup_by_similarity(
         for j in range(i + 1, n):
             if not keep[j]:
                 continue
+            if _different_numeric_anchors(items[i].get("title", ""), items[j].get("title", "")):
+                continue
             # Skip comparison if either article has a sparse vector
             if too_short[i] or too_short[j]:
                 continue
@@ -246,14 +261,20 @@ def _kw_matches(kw_norm: str, text: str) -> bool:
        — lets mixed-language phrases like "RBA 利率" match English articles
          that only contain the English part "rba".
     """
-    if kw_norm in text:
-        return True
-    # Space-collapsed: handles "ASX200" vs "ASX 200"
-    if kw_norm.replace(" ", "") in text.replace(" ", ""):
+    def contains(term):
+        # CJK phrases have no reliable whitespace word boundary. Latin short
+        # terms do: AI must not match chair, and US must not match music.
+        if _CJK_RE.search(term):
+            return term in text
+        spaced = re.sub(r"(?<=[a-z])(?=\d)|(?<=\d)(?=[a-z])", " ", term)
+        pattern = r"\s*".join(re.escape(part) for part in spaced.split())
+        return bool(pattern and re.search(r"(?<!\w)" + pattern + r"(?!\w)", text))
+
+    if contains(kw_norm):
         return True
     # Word-level fallback for multi-word phrases
     words = [w for w in kw_norm.split() if len(w) >= 2]
-    if len(words) > 1 and any(w in text for w in words):
+    if len(words) > 1 and any(contains(w) for w in words):
         return True
     return False
 
@@ -363,6 +384,8 @@ def _significant_words(text: str) -> set[str]:
 
 def _title_similarity(a: str, b: str) -> float:
     """Combined metric: max of SequenceMatcher ratio and word/ngram overlap coefficient."""
+    if _different_numeric_anchors(a, b):
+        return 0.0
     seq_sim = SequenceMatcher(None, a, b).ratio()
 
     words_a = _significant_words(a)
@@ -389,7 +412,8 @@ def _parse_date(raw: str) -> datetime | None:
         "%Y-%m-%d",
     ):
         try:
-            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+            parsed = datetime.strptime(raw, fmt)
+            return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
         except (ValueError, TypeError):
             continue
     return None

@@ -42,6 +42,7 @@ export default function NewsCard({
   const isImportant = effImp >= IMPORTANCE_THRESHOLD;
   const isArchived = article.status === "archived";
   const showTrackingPin = shouldShowTrackingPin(isKept);
+  const isUnprocessed = !article.summary && article.importance === 0;
 
   // Context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
@@ -86,15 +87,15 @@ export default function NewsCard({
           className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${sentiment.bg} ${sentiment.color}`}
         >
           <SentimentIcon className="w-3 h-3" />
-          {curSentiment}
+          {isUnprocessed ? "Not analyzed" : curSentiment}
         </span>
         {article.source_score > 0 && (
           <span
             className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-            title={`Source quality score: ${(article.source_score * 100).toFixed(0)}%`}
+            title={`Source selection priority: ${(article.source_score * 100).toFixed(0)}/100. A ranking heuristic, not factual verification.`}
           >
             <Shield className="w-3 h-3" />
-            {(article.source_score * 100).toFixed(0)}
+            Source {(article.source_score * 100).toFixed(0)}
           </span>
         )}
         {article.source_type && article.source_type !== "search" && (

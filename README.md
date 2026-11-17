@@ -2,7 +2,7 @@
 
 The configured long-running LAN service is documented in [SPARK_DEPLOYMENT.md](SPARK_DEPLOYMENT.md): Alibaba Qwen, real news collection, persistent databases/indexes, daily backups and restore verification.
 
-> Start the complete local system with `python3 scripts/run-local.py --install`, then open http://127.0.0.1:3870/. External calls and scheduling are off by default. See [EVENT_MEMORY.md](EVENT_MEMORY.md) for configuration and the event model, and [SYSTEM_VALIDATION.md](SYSTEM_VALIDATION.md) for repairs and test results. Legacy chat and ingestion have not yet migrated to the new event store. See [BRANCH_MANAGEMENT.md](BRANCH_MANAGEMENT.md) for branch history.
+> Start the complete local system with `python3 scripts/run-local.py --install`, then open http://127.0.0.1:3870/. External calls and scheduling are off by default. [WORKFLOW_IMPLEMENTATION.md](WORKFLOW_IMPLEMENTATION.md) documents the integrated ModelRelease collection → event memory → Updates → evidence-backed chat flow. Other event types retain legacy research coverage. See [EVENT_MEMORY.md](EVENT_MEMORY.md) for the temporal store, [SYSTEM_VALIDATION.md](SYSTEM_VALIDATION.md) for earlier repairs, and [BRANCH_MANAGEMENT.md](BRANCH_MANAGEMENT.md) for branch history.
 
 Real-time industry monitoring system powered by AI. Automatically fetches, deduplicates, clusters, summarizes, and categorizes industry news from multiple sources. Builds a structured, time-aware knowledge base over time, and exposes it through an AI chatbot that uses a multi-layer RAG pipeline to answer questions with full temporal awareness.
 

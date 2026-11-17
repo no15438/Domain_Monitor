@@ -109,6 +109,8 @@ export default function MacroAnalysisPanel({
 
   // Prefer globalSlice (kept in sync by polling) over overviewArtifact (loaded once at mount)
   const globalContent = (globalSlice?.content || overviewArtifact?.content) ?? "";
+  const globalNotice = globalSlice ? globalSlice.eventMemoryNotice : overviewArtifact?.event_memory_notice;
+  const globalStale = globalSlice ? globalSlice.eventMemoryStale : overviewArtifact?.event_memory_stale;
   // Citations come from the slice (updated after every poll tick) or fall back to the artifact metadata
   const globalCitations =
     (globalSlice?.citations?.length ? globalSlice.citations : undefined) ??
@@ -258,7 +260,7 @@ export default function MacroAnalysisPanel({
   useEffect(() => {
     if (activeTopicId == null) return;
     void hydrateGlobalOverview(activeTopicId);
-  }, [activeTopicId, hydrateGlobalOverview]);
+  }, [activeTopicId, hydrateGlobalOverview, refreshKey]);
 
   const handleGenerate = () => {
     if (activeTopicId == null || globalGenerating) return;
@@ -748,6 +750,7 @@ export default function MacroAnalysisPanel({
         )}
 
         {/* Overview content */}
+        {globalNotice && <p role="status" className={`rounded-lg border p-3 text-xs leading-relaxed ${globalStale ? "border-important/30 bg-important/10 text-important" : "border-border bg-surface-hover text-muted"}`}>{globalNotice}</p>}
         {globalContent ? (
           <AnalysisRichText content={globalContent} citations={globalCitations} />
         ) : !globalGenerating ? (

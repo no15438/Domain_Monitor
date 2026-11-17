@@ -60,7 +60,7 @@ class EvolutionFactBundle:
     current_claims: list[dict]
 
     new_events: list[dict]             # events in TN but not T1
-    resolved_events: list[dict]        # events in T1 but not TN
+    resolved_events: list[dict]        # explicit business resolutions, never report set subtraction
     new_claims: list[dict]             # claims in TN but not T1
     dropped_claims: list[dict]         # claims in T1 but not TN
     persisted_claims: list[dict]       # claims in both snapshots
@@ -68,6 +68,7 @@ class EvolutionFactBundle:
     claim_evolution_records: list[dict]
     snapshot_deltas: list[dict]
     evidence_sets: list[dict]
+    left_report_events: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -152,15 +153,35 @@ def _analysis_time_text(row: dict) -> str:
     return str(row.get("published_at") or row.get("created_at") or "")
 
 
-def _build_citation_catalog(topic_id: int) -> list[CitationItem]:
+def _memory_briefing(topic_id: int) -> dict | None:
+    from config import settings
+    if not settings.event_memory_enabled:
+        return None
+    from event_retrieval import retrieve_event_memory
+    memory = retrieve_event_memory(topic_id, "", max_events=8)
+    citations = []
+    text = memory.get("text", "")
+    for index, source in enumerate(memory.get("sources", []), 101):
+        citation_id = f"E{index}"
+        text = text.replace(f"[{source['id']}]", f"[{citation_id}]")
+        citations.append({**source, "id": citation_id, "type": "article"})
+    return {**memory, "text": text, "citations": citations}
+
+
+def _build_citation_catalog(topic_id: int, memory_context: dict | None = None) -> list[CitationItem]:
     """Build a compact citation catalog for long-form analysis rendering."""
     summary = get_insight_summary(topic_id, 168)
     events = summary.get("top_events", [])[:8]
     articles = get_articles(
         limit=30, offset=0, topic_id=topic_id, sort="relevance", status="active"
     )
-    citations: list[CitationItem] = []
-    used_urls: set[str] = set()
+    memory = memory_context if memory_context is not None else _memory_briefing(topic_id)
+    if memory:
+        from event_retrieval import is_managed_legacy
+        events = [event for event in events if not is_managed_legacy(event)]
+        articles = [article for article in articles if not is_managed_legacy(article)]
+    citations: list[CitationItem] = list((memory or {}).get("citations", []))
+    used_urls: set[str] = {item["url"] for item in citations if item.get("url")}
     event_idx = 1
     article_idx = 1
 
@@ -507,6 +528,7 @@ def _collect_stats_metadata(
     topic_id: int,
     hours: int = 24,
     citations: list[CitationItem] | None = None,
+    memory_context: dict | None = None,
 ) -> dict:
     """Gather all stats metadata into a serializable dict for snapshot storage."""
     summary = get_insight_summary(topic_id, hours)
@@ -525,6 +547,8 @@ def _collect_stats_metadata(
         "avg_topic_relevance": trending["avg_topic_relevance"],
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "citations": citations or [],
+        "event_memory_inputs": (memory_context or {}).get("events", []),
+        "event_memory_scope": (memory_context or {}).get("scope"),
     }
 
 
@@ -549,7 +573,7 @@ def _get_topic_research_context(topic_id: int) -> dict:
     return {"name": "", "brief": "", "angles": [], "entities": [], "geographic_scope": [], "sector_scope": []}
 
 
-def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dict], list[dict]]:
+def _build_context(topic_id: int, hours: int = 24, memory_context: dict | None = None) -> tuple[str | None, list[dict], list[dict]]:
     """Build LLM context from the lineage model only."""
     summary_data = get_insight_summary(topic_id, hours)
     topic_insight = get_topic_insights(topic_id, hours)
@@ -559,7 +583,17 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
     claims = get_current_claims(topic_id, limit=20)
     claim_evolution = get_claim_evolution(topic_id, limit=25)
 
+    memory = memory_context if memory_context is not None else _memory_briefing(topic_id)
+    if memory:
+        from event_retrieval import is_managed_legacy
+        events = [event for event in events if not is_managed_legacy(event)]
+        claims = [claim for claim in claims if not is_managed_legacy(claim)]
+
     parts = []
+    if memory:
+        parts.append("[Authoritative ModelRelease projection — source-backed fields only]\n" + memory["text"])
+        parts.append("Other material below is legacy coverage and analysis. It cannot override these ModelRelease fields. "
+                     "Unaccepted candidates are not current facts; leave unsupported release details unknown.")
     if rc["brief"]:
         parts.append(f"[Research Direction] {rc['brief']}")
     if rc["angles"]:
@@ -586,7 +620,7 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
         ent_str = ", ".join(f"{e['entity']}({e['count']})" for e in trending["top_entities"][:10])
         parts.append(f"[Top entities] {ent_str}")
 
-    if events or claims:
+    if events or claims or (memory and memory.get("events")):
         if events:
             parts.append("\n[Active events]")
             for i, event in enumerate(events[:15], 1):
@@ -628,7 +662,10 @@ def _build_context(topic_id: int, hours: int = 24) -> tuple[str | None, list[dic
     articles = get_articles(
         limit=35, offset=0, topic_id=topic_id, sort="relevance", status="active"
     )
-    if summary_data.get("total_articles", 0) > 0 or articles:
+    if memory:
+        from event_retrieval import is_managed_legacy
+        articles = [article for article in articles if not is_managed_legacy(article)]
+    if articles or (not memory and summary_data.get("total_articles", 0) > 0):
         parts.append(
             "\n[Recent articles — no structured events/claims in DB yet; use these headlines]"
         )
@@ -669,7 +706,10 @@ def _build_delta_summary(previous_snapshot_id: int | None, snapshot_id: int, top
     prev_claim_ids = {c["id"] for c in prev_claims}
 
     new_event_ids = sorted(current_event_ids - prev_event_ids)
-    resolved_event_ids = sorted(prev_event_ids - current_event_ids)
+    left_report_event_ids = sorted(prev_event_ids - current_event_ids)
+    # Limited snapshot membership is an attention/read-model decision. It
+    # cannot establish a completed/cancelled business transition.
+    resolved_event_ids = []
 
     # Set-difference signals: membership change, not semantic strength change
     emerged_claim_ids: set[str] = current_claim_ids - prev_claim_ids
@@ -735,7 +775,7 @@ def _build_delta_summary(previous_snapshot_id: int | None, snapshot_id: int, top
 
     summary = (
         f"Topic {topic_id} changed between snapshots: "
-        f"{len(new_event_ids)} new events, {len(resolved_event_ids)} resolved events, "
+        f"{len(new_event_ids)} events entered the report, {len(left_report_event_ids)} left the report, "
         f"{len(emerged_list)} emerged claims, {len(dropped_list)} dropped claims, "
         f"{len(strengthened_list)} strengthened claims (semantic), "
         f"{len(weakened_list)} weakened claims (semantic)."
@@ -744,6 +784,7 @@ def _build_delta_summary(previous_snapshot_id: int | None, snapshot_id: int, top
         "change_summary": summary,
         "new_event_ids": new_event_ids,
         "resolved_event_ids": resolved_event_ids,
+        "left_report_event_ids": left_report_event_ids,
         # Semantically labelled from claim_evolution only
         "strengthened_claim_ids": strengthened_list,
         "weakened_claim_ids": weakened_list,
@@ -827,6 +868,7 @@ def _persist_and_vectorize(topic_id: int, overview_text: str, stats: dict, event
             # Set-difference membership signals (not stored in dedicated columns)
             "emerged_claim_ids": delta.get("emerged_claim_ids", []),
             "dropped_claim_ids": delta.get("dropped_claim_ids", []),
+            "left_report_event_ids": delta.get("left_report_event_ids", []),
         },
     )
     print(f"[summary] snapshot {snapshot_id} saved and vectorized for topic {topic_id}")
@@ -838,14 +880,15 @@ def generate_topic_summary(topic_id: int, hours: int = 24):
 
     yield {"status": "analyzing"}
 
-    ctx, events, claims = _build_context(topic_id, hours)
+    memory = _memory_briefing(topic_id)
+    ctx, events, claims = _build_context(topic_id, hours, memory)
     if not ctx:
         msg = "No lineage data available for this topic yet. Add keywords and run fetch to generate events and claims."
         yield msg
         return
 
-    citations = _build_citation_catalog(topic_id)
-    stats = _collect_stats_metadata(topic_id, hours, citations)
+    citations = _build_citation_catalog(topic_id, memory)
+    stats = _collect_stats_metadata(topic_id, hours, citations, memory)
 
     yield {"status": "generating"}
 
@@ -873,14 +916,15 @@ def generate_topic_summary(topic_id: int, hours: int = 24):
 
 def generate_summary_sync(topic_id: int, hours: int = 24) -> str:
     """Non-streaming version for scheduled background generation."""
-    ctx, events, claims = _build_context(topic_id, hours)
+    memory = _memory_briefing(topic_id)
+    ctx, events, claims = _build_context(topic_id, hours, memory)
     if not ctx:
         return ""
 
     from llm_client import llm_chat
 
-    citations = _build_citation_catalog(topic_id)
-    stats = _collect_stats_metadata(topic_id, hours, citations)
+    citations = _build_citation_catalog(topic_id, memory)
+    stats = _collect_stats_metadata(topic_id, hours, citations, memory)
 
     messages = [
         {"role": "system", "content": SUMMARY_SYSTEM},
@@ -931,7 +975,7 @@ Rules:
 - ONLY use IDs from the [Citation Catalog] (E# and A# format) as inline citations. Do NOT reference context labels like ClaimRef, EventRef, EvidenceRef, EvolutionRef, [Claim-N], [Event-N], [Evidence-N], or [Evidence-N] as citations in the output."""
 
 
-def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | None]:
+def _build_global_overview_context(topic_id: int, memory_context: dict | None = None) -> tuple[str | None, str | None]:
     """Returns (context_string, error_message_if_skip). If skip, context is None."""
     snapshots = get_temporal_snapshots(topic_id, window_type="daily", limit=5)
     deltas = get_snapshot_deltas(topic_id, limit=4)
@@ -940,11 +984,17 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
     claim_evolution = get_claim_evolution(topic_id, limit=30)
     evidence_sets = list_evidence_sets(topic_id, limit=20)
     rc = _get_topic_research_context(topic_id)
+    memory = memory_context if memory_context is not None else _memory_briefing(topic_id)
+    if memory:
+        from event_retrieval import is_managed_legacy
+        events = [event for event in events if not is_managed_legacy(event)]
+        claims = [claim for claim in claims if not is_managed_legacy(claim)]
+        evidence_sets = [evidence for evidence in evidence_sets if not is_managed_legacy(evidence)]
 
     use_article_fallback = False
     fb_summary: dict | None = None
     fb_articles: list = []
-    if not snapshots and not events and not claims and not evidence_sets:
+    if not snapshots and not events and not claims and not evidence_sets and not (memory and memory.get("events")):
         fb_summary = get_insight_summary(topic_id, 168)
         fb_articles = get_articles(
             limit=40, offset=0, topic_id=topic_id, sort="relevance", status="active"
@@ -957,6 +1007,10 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
         use_article_fallback = True
 
     ctx_parts = []
+    if memory:
+        ctx_parts.append("=== Authoritative current ModelRelease fields ===\n" + memory["text"])
+        ctx_parts.append("Historical snapshots and legacy analysis below are historical interpretations. "
+                         "They cannot override this current projection. Never fill unknown release fields from old summaries.")
 
     # Research context header
     if rc["brief"] or rc["angles"]:
@@ -1067,14 +1121,15 @@ def _build_global_overview_context(topic_id: int) -> tuple[str | None, str | Non
 
 def generate_global_overview_sync(topic_id: int) -> str:
     """Run global overview in a background thread: full LLM call + persist. Survives client disconnect."""
-    ctx, err = _build_global_overview_context(topic_id)
+    memory = _memory_briefing(topic_id)
+    ctx, err = _build_global_overview_context(topic_id, memory)
     if err:
         return err
 
     snapshot_rows = get_temporal_snapshots(topic_id, window_type="daily", limit=5)
     delta_rows = get_snapshot_deltas(topic_id, limit=4)
     claim_rows = get_current_claims(topic_id, limit=20)
-    citations = _build_citation_catalog(topic_id)
+    citations = _build_citation_catalog(topic_id, memory)
 
     messages = [
         {"role": "system", "content": GLOBAL_OVERVIEW_SYSTEM},
@@ -1095,7 +1150,9 @@ def generate_global_overview_sync(topic_id: int) -> str:
         title="Global Overview",
         content=result,
         status="final",
-        metadata={"source": "temporal_snapshots", "citations": citations},
+        metadata={"source": "temporal_snapshots", "citations": citations,
+                  "event_memory_inputs": (memory or {}).get("events", []),
+                  "event_memory_scope": (memory or {}).get("scope")},
         source_snapshot_ids=[row["id"] for row in snapshot_rows],
         source_delta_ids=[row["id"] for row in delta_rows],
         source_claim_ids=[row["id"] for row in claim_rows],
@@ -1202,7 +1259,8 @@ def _load_evolution_fact_bundle(topic_id: int) -> EvolutionFactBundle:
     all_claims: dict = {c["id"]: c for c in baseline_claims + current_claims}
 
     new_event_ids = current_event_ids - baseline_event_ids
-    resolved_event_ids = baseline_event_ids - current_event_ids
+    left_report_event_ids = baseline_event_ids - current_event_ids
+    resolved_event_ids: set[str] = set()
     new_claim_ids = current_claim_ids - baseline_claim_ids
     dropped_claim_ids = baseline_claim_ids - current_claim_ids
     persisted_claim_ids = baseline_claim_ids & current_claim_ids
@@ -1236,6 +1294,7 @@ def _load_evolution_fact_bundle(topic_id: int) -> EvolutionFactBundle:
         claim_evolution_records=claim_evolution,
         snapshot_deltas=deltas,
         evidence_sets=evidence_sets,
+        left_report_events=[all_events[eid] for eid in sorted(left_report_event_ids) if eid in all_events],
     )
 
 
@@ -1326,6 +1385,13 @@ def _render_evolution_debug_context(bundle: EvolutionFactBundle) -> str:
         else ""
     )
     diff_parts: list[str] = []
+
+    if bundle.left_report_events:
+        diff_parts.append(
+            "[Report coverage only — not business resolution]\n"
+            + "\n".join(f"  {ev.get('title', ev['id'])} left this report's limited selection."
+                        for ev in bundle.left_report_events[:10])
+        )
 
     if bundle.new_events:
         lines = [
@@ -1465,6 +1531,8 @@ def _build_extractor_user_message(
         f"Current UTC time: {datetime.now(timezone.utc).isoformat()}",
         f"Signal Tier: {bundle.tier.upper()}",
         f"Time span: {b_ts[:19]} → {c_ts[:19]}",
+        "Snapshot membership measures report coverage. An item leaving a report is not a resolved business event. "
+        "Distinguish sourced observations from forecasts and interpretation. Do not invent a transition from absence.",
     ]
 
     # Context Events from citation catalog — provide framing events so extractor

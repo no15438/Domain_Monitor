@@ -54,6 +54,8 @@ export interface GlobalOverviewSlice {
   isGenerating: boolean;
   lastStatus?: string;
   lastError?: string | null;
+  eventMemoryStale?: boolean;
+  eventMemoryNotice?: string | null;
 }
 
 export interface LiveSummarySlice {
@@ -63,6 +65,8 @@ export interface LiveSummarySlice {
   isGenerating: boolean;
   lastStatus?: string;
   lastError?: string | null;
+  eventMemoryStale?: boolean;
+  eventMemoryNotice?: string | null;
 }
 
 export type ActionStatus = "idle" | "running" | "success" | "error";
@@ -216,6 +220,8 @@ interface AppState {
   selectedArticle: Article | null;
   /** Native event chat context — preferred over selectedArticle for event cards. */
   selectedEventContext: EventChatContext | null;
+  eventMemoryScope: import("@/lib/api/workflow").MemoryScope | null;
+  setEventMemoryScope: (scope: import("@/lib/api/workflow").MemoryScope | null) => void;
   /** Currently selected event in the Knowledge panel — drives middle feed filtering. */
   selectedKnowledgeEventId: string | null;
   /** Title of the selected knowledge event (for display in filter banner). */
@@ -311,6 +317,7 @@ export const useStore = create<AppState>()(
   chatMessagesByConversation: {},
   selectedArticle: null,
   selectedEventContext: null,
+  eventMemoryScope: null,
   selectedKnowledgeEventId: null,
   selectedKnowledgeEventTitle: null,
   fetchingTopicId: null,
@@ -417,6 +424,8 @@ export const useStore = create<AppState>()(
               content,
               generatedAt,
               citations,
+              eventMemoryStale: data.event_memory_stale ?? false,
+              eventMemoryNotice: data.event_memory_notice ?? null,
               isGenerating: st.generating,
               lastStatus: st.status,
               lastError: st.error ?? null,
@@ -450,6 +459,8 @@ export const useStore = create<AppState>()(
               content: s.liveSummaryByTopic[topicId]?.content ?? "",
               generatedAt: s.liveSummaryByTopic[topicId]?.generatedAt ?? null,
               citations: s.liveSummaryByTopic[topicId]?.citations ?? [],
+              eventMemoryStale: s.liveSummaryByTopic[topicId]?.eventMemoryStale,
+              eventMemoryNotice: s.liveSummaryByTopic[topicId]?.eventMemoryNotice,
               isGenerating: false,
               lastStatus: "error",
               lastError: "Failed to poll AI analysis status",
@@ -480,6 +491,8 @@ export const useStore = create<AppState>()(
             content,
             generatedAt,
             citations,
+            eventMemoryStale: data.event_memory_stale ?? false,
+            eventMemoryNotice: data.event_memory_notice ?? null,
             isGenerating: st.generating,
             lastStatus: st.status,
             lastError: st.error ?? null,
@@ -714,6 +727,8 @@ export const useStore = create<AppState>()(
               isGenerating: st.generating,
               lastStatus: st.status,
               lastError: st.error ?? null,
+              eventMemoryStale: data.event_memory_stale ?? false,
+              eventMemoryNotice: data.event_memory_notice ?? null,
             },
           },
         }));
@@ -741,6 +756,7 @@ export const useStore = create<AppState>()(
           globalOverviewByTopic: {
             ...s.globalOverviewByTopic,
             [topicId]: {
+              ...s.globalOverviewByTopic[topicId],
               content: s.globalOverviewByTopic[topicId]?.content ?? "",
               isGenerating: false,
               lastStatus: "error",
@@ -773,6 +789,8 @@ export const useStore = create<AppState>()(
             isGenerating: st.generating,
             lastStatus: st.status,
             lastError: st.error ?? null,
+            eventMemoryStale: data.event_memory_stale ?? false,
+            eventMemoryNotice: data.event_memory_notice ?? null,
           },
         },
       }));
@@ -809,6 +827,7 @@ export const useStore = create<AppState>()(
       globalOverviewByTopic: {
         ...s.globalOverviewByTopic,
         [topicId]: {
+          ...s.globalOverviewByTopic[topicId],
           content: s.globalOverviewByTopic[topicId]?.content ?? "",
           isGenerating: true,
           lastStatus: "running",
@@ -932,6 +951,7 @@ export const useStore = create<AppState>()(
       selectedKnowledgeEventTitle: null,
       selectedArticle: null,
       selectedEventContext: null,
+      eventMemoryScope: null,
       isChatLoading: !!nextTask?.running,
     });
   },
@@ -943,8 +963,9 @@ export const useStore = create<AppState>()(
       return { articles: [...unique, ...s.articles] };
     }),
   setKeywords: (keywords) => set({ keywords }),
-  setSelectedArticle: (article) => set({ selectedArticle: article, selectedEventContext: null }),
-  setSelectedEventContext: (ctx) => set({ selectedEventContext: ctx, selectedArticle: null }),
+  setSelectedArticle: (article) => set({ selectedArticle: article, selectedEventContext: null, eventMemoryScope: null }),
+  setSelectedEventContext: (ctx) => set({ selectedEventContext: ctx, selectedArticle: null, eventMemoryScope: null }),
+  setEventMemoryScope: (scope) => set({ eventMemoryScope: scope, selectedArticle: null, selectedEventContext: null }),
   setSelectedKnowledgeEvent: (id, title = null) => set({ selectedKnowledgeEventId: id, selectedKnowledgeEventTitle: id ? (title ?? null) : null }),
   setFetchingTopic: (id) => set({ fetchingTopicId: id }),
   setChatLoading: (v) => set({ isChatLoading: v }),
@@ -971,6 +992,7 @@ export const useStore = create<AppState>()(
         chatTaskByTopic: { ...s.chatTaskByTopic, [key]: null },
         selectedArticle: null,
         selectedEventContext: null,
+        eventMemoryScope: null,
         isChatLoading: false,
       };
     }),
@@ -1020,7 +1042,7 @@ export const useStore = create<AppState>()(
     const conversationId = get().chatConversationIdByTopic[topicKey] ?? null;
     set({ isChatLoading: true });
     try {
-      await apiCreateChatTask(message, articleContext, topicId, conversationId);
+      await apiCreateChatTask(message, articleContext, topicId, conversationId, get().eventMemoryScope);
       await get().hydrateChatConversation(topicId);
       get().ensureChatTaskPoll(topicId);
       if (get().activeTopicId === topicId) set({

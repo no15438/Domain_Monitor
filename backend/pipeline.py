@@ -69,6 +69,7 @@ from relevance import (
     select_representatives,
 )
 from config import settings
+from event_workflow import get_workflow, looks_like_release, _source_text
 
 from collectors import newsapi_collector, rss_collector, googlenews_collector, eventregistry_collector, tavily_collector
 
@@ -105,6 +106,15 @@ Each object must have:
   - Cover different analytical angles — do NOT repeat the same point with different words
   - At least one "observation" (what happened) and one forward-looking kind ("forecast" or "trend") when the article supports it
   - If the article only supports one clear claim, return 1 item (minimum 1, maximum 4)
+- "model_release": null unless the captured source explicitly describes a particular AI model release.
+  Otherwise return an object with "developer", "model" (family name), "version" (exact release/version identifier),
+  "status" ("announced", "available" or "withdrawn"), "valid_from" and "quote".
+  "quote" must be ONE contiguous VERBATIM passage from Source text supporting the identity and status.
+  Prefer one focused sentence binding that exact developer, model version, status and effective timestamp.
+  Never borrow a different release version's action or timestamp from elsewhere in the article.
+  "valid_from" must be a timezone-aware ISO datetime explicitly present in that passage; use null if unknown.
+  Publication/fetch timestamps are NOT effective timestamps. Do not invent midnight for a calendar date.
+  Unknown identity fields must remain null. Different model versions are separate releases.
 
 Return ONLY a valid JSON array. No markdown fences, no explanation."""
 
@@ -330,8 +340,8 @@ def _tag(items: list[dict], source_type: str) -> list[dict]:
 def _url_dedup(items: list[dict], existing_urls: set[str]) -> list[dict]:
     """Exact URL dedup using normalized URLs.
 
-    Also rewrites item["url"] to its canonical form so downstream stages
-    and the database always store a clean URL.
+    Retains the original URL. Workflow revisions have their own durable replay
+    boundary, so a revised page or another Topic can still be processed.
     """
     seen: set[str] = set()
     # Pre-normalise the existing URL set once
@@ -342,10 +352,11 @@ def _url_dedup(items: list[dict], existing_urls: set[str]) -> list[dict]:
         if not raw_url:
             continue
         norm = normalize_url(raw_url)
-        if norm in norm_existing or norm in seen:
+        revision_key = (norm, item.get("_workflow_revision_id")) if item.get("_workflow_should_process") else norm
+        if (norm in norm_existing and not item.get("_workflow_should_process")) or revision_key in seen:
             continue
-        seen.add(norm)
-        item["url"] = norm  # store canonical form
+        seen.add(revision_key)
+        item["normalized_url"] = norm
         unique.append(item)
     return unique
 
@@ -457,12 +468,14 @@ _DEFAULT_PARSED = {
     "summary": "",
     "tags": [],
     "sentiment": "neutral",
-    "importance": 5,
-    "topic_relevance": 0.5,
+    "importance": 0,
+    "topic_relevance": 0.0,
     "claim_kind": "observation",
     "signal_type": "market signal",
     "key_entities": [],
     "topic_analysis": "",
+    "model_release": None,
+    "_extraction_failed": True,
 }
 
 
@@ -481,7 +494,7 @@ def _call_batch_llm(
     """Send one LLM call for a batch of articles. Returns a list of parsed dicts
     (same length as batch). Falls back to defaults if parsing fails."""
     articles_block = "\n\n".join(
-        f"[Article {i + 1}]\nTitle: {item['title']}\nContent: {(item.get('content') or '')[:700]}"
+        f"[Article {i + 1}]\nTitle: {item['title']}\nSource text: {_source_text(item)[:5000]}"
         for i, item in enumerate(batch)
     )
     prompt = BATCH_ENRICH_PROMPT.format(n=len(batch), articles_block=articles_block, **context_params)
@@ -491,14 +504,14 @@ def _call_batch_llm(
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
         parsed_list = json.loads(raw)
-        if isinstance(parsed_list, list) and len(parsed_list) == len(batch):
+        if isinstance(parsed_list, list) and len(parsed_list) == len(batch) and all(isinstance(p, dict) for p in parsed_list):
             return parsed_list
         log.warning("batch LLM returned %s items, expected %d — using defaults",
                     len(parsed_list) if isinstance(parsed_list, list) else type(parsed_list), len(batch))
     except Exception as e:
         log.error("batch LLM parse error: %s", e)
     # Fallback: fill with defaults (no extra LLM call — keeps MLX happy)
-    return [{**_DEFAULT_PARSED, "summary": (item.get("content") or "")[:120]} for item in batch]
+    return [dict(_DEFAULT_PARSED) for item in batch]
 
 
 def _enrich_and_store(
@@ -533,7 +546,7 @@ def _enrich_and_store(
     # Filter out already-seen URLs first so we only enrich genuinely new articles
     new_items: list[dict] = []
     for item in canonicals:
-        if item["url"] in existing_urls:
+        if item["url"] in existing_urls and not item.get("_workflow_should_process"):
             # Article already in DB — keep event_size in sync so the badge
             # stays accurate even if the cluster size grew since first insert.
             # Also reconcile the event_id in case the cluster seed changed.
@@ -546,6 +559,7 @@ def _enrich_and_store(
                 event_size=item.get("_event_size", 1),
             )
             continue
+        item["_legacy_existing"] = item["url"] in existing_urls
         existing_urls.add(item["url"])
         new_items.append(item)
 
@@ -580,6 +594,12 @@ def _enrich_and_store(
         log.info("enriched batch %d (%d articles)", batch_start // BATCH_SIZE + 1, len(batch))
 
         for item, parsed in zip(batch, parsed_list):
+            if topic_id is not None and settings.event_memory_enabled:
+                get_workflow().ingest_extraction(topic_id, item, parsed)
+            if item.get("_legacy_existing"):
+                # This immutable revision or Topic observation still reached the
+                # event workflow. Do not manufacture a second legacy article ID.
+                continue
             # #region agent log
             try:
                 import json as _json2, time as _time2
@@ -628,7 +648,12 @@ def _enrich_and_store(
             )
             new_articles.append(article)
 
-            if topic_id is not None:
+            if parsed.get("_extraction_failed"):
+                # Source display can continue while knowledge extraction waits
+                # for a retry. Default values are not analytical claims.
+                continue
+
+            if topic_id is not None and not parsed.get("_extraction_failed"):
                 event_id = effective_event_id
                 last_seen_at = article["published_at"] or datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -649,7 +674,7 @@ def _enrich_and_store(
                 )
 
                 event_size = item.get("_event_size", 1)
-                event_status = "stabilized" if event_size >= 3 else "active"
+                event_status = "active"
                 # Only create/update an event record for multi-source clusters (2+ articles).
                 # Single-article entries remain as plain articles in the news feed only.
                 if event_size >= 2:
@@ -665,11 +690,14 @@ def _enrich_and_store(
                         last_seen_at=last_seen_at,
                         novelty_window_end=last_seen_at,
                         stability_score=min(1.0, event_size / 5),
-                        fact_confidence=min(1.0, _coerce_float(parsed.get("topic_relevance"), 0.5)),
+                        fact_confidence=0.0,
                         metadata={
                             "source_score": item.get("_source_score", 0),
                             "importance": article["importance"],
                             "sentiment": article["sentiment"],
+                            "review_state": "machine_only",
+                            "support_state": "unassessed",
+                            "coverage_score": min(1.0, event_size / 5),
                         },
                     )
                     # Mark whether this event is brand-new (not previously known in stubs)
@@ -693,7 +721,7 @@ def _enrich_and_store(
                     ]
 
                 signal_type = (parsed.get("signal_type") or "market signal").strip()[:40] or "market signal"
-                claim_confidence = min(1.0, _coerce_float(parsed.get("topic_relevance"), 0.5))
+                claim_confidence = 0.0  # Research relevance is not factual support.
                 claim_half_life = 14.0 if article["importance"] >= 8 else 7.0
 
                 # #region agent log
@@ -940,6 +968,13 @@ def _run_for_topic(topic_id: int, existing_urls: set[str]) -> list[dict]:
     if all_feeds:
         raw.extend(_collect_rss(all_feeds))
 
+    # Preserve every source revision and Topic relationship before dropping or
+    # selecting anything. The durable queue also drains canonical overflow.
+    workflow = get_workflow() if settings.event_memory_enabled else None
+    if workflow:
+        workflow.resume_commits(topic_id)
+        workflow.capture_documents(topic_id, raw)
+
     # Stage 2: URL DEDUP (normalized)
     url_unique = _url_dedup(raw, existing_urls)
 
@@ -959,6 +994,21 @@ def _run_for_topic(topic_id: int, existing_urls: set[str]) -> list[dict]:
 
     # Stage 4+5: EVENT CLUSTER + CANONICAL SELECTION — uses topic-level cluster threshold
     clusters, canonicals = _cluster_and_select(relevant, cluster_threshold=cluster_threshold)
+    if workflow:
+        pending = [item for item in workflow.pending_documents(topic_id, limit=100) if looks_like_release(item)]
+        pending = _relevance_filter(pending, keyword_list + list(entities), min_score=relevance_min) if keyword_list or entities else pending
+        # Earlier pending revisions go first, so fresh arrivals cannot starve
+        # older distinct releases or corrections indefinitely.
+        selected, selected_ids = [], set()
+        for item in pending + canonicals:
+            key = item.get("_workflow_revision_id") or item.get("url")
+            if key in selected_ids:
+                continue
+            selected_ids.add(key)
+            selected.append(item)
+            if len(selected) >= min(MAX_ENRICH, settings.max_enrich_per_run):
+                break
+        canonicals = selected
 
     log.info(
         "topic=%d: %d collected → %d url-unique → %d sem-unique → %d relevant → %d events → %d canonicals → enriching",

@@ -579,7 +579,8 @@ class TestFullEvolutionE2E:
         assert bundle.tier == "full", f"Expected full tier, got {bundle.tier}"
         assert len(bundle.new_events) >= 1, "Expected at least one new event in rich scenario"
         assert len(bundle.new_claims) >= 1, "Expected at least one new claim in rich scenario"
-        assert len(bundle.resolved_events) >= 1, "Expected at least one resolved event in rich scenario"
+        assert len(bundle.left_report_events) >= 1, "Expected a report membership departure in rich scenario"
+        assert not bundle.resolved_events, "Departure is not evidence of business resolution"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

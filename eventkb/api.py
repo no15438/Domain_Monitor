@@ -50,7 +50,7 @@ class EvidenceInput(StrictModel):
     revision: str
     publisher: str
     url: str
-    published_at: str
+    published_at: str = ""
     body: str
 
 

@@ -23,6 +23,7 @@ import {
 import { useStore } from "@/stores/useStore";
 import { streamConversation } from "@/lib/api";
 import type { ChatTracePayload, ChatSource } from "@/lib/api";
+import { safeEvidenceUrl } from "@/lib/api/eventMemory";
 
 // ─── Chat-rich text with inline source chips ─────────────────────────────────
 
@@ -43,21 +44,15 @@ function truncateLabel(value: string, max = 28): string {
 }
 
 function resolveSourceMatch(label: string, sourceId: string | undefined, sources: ChatSource[]) {
-  if (sourceId) {
-    const exact = sources.find((source) => source.id.toUpperCase() === sourceId.toUpperCase());
-    if (exact) return exact;
-  }
+  const token = sourceId || (/^[A-Z]\d+$/i.test(label) ? label : undefined);
+  if (token) return sources.find((source) => source.id.toUpperCase() === token.toUpperCase());
 
   const normalizedLabel = normalizeSourceLabel(label);
   if (!normalizedLabel) return undefined;
 
   return sources.find((source) => {
     const normalizedTitle = normalizeSourceLabel(source.title);
-    return (
-      normalizedTitle === normalizedLabel ||
-      normalizedTitle.includes(normalizedLabel) ||
-      normalizedLabel.includes(normalizedTitle)
-    );
+    return normalizedTitle === normalizedLabel;
   });
 }
 
@@ -75,9 +70,22 @@ function parseInternalNav(
 
   const id = source.id;
   if (id.startsWith("event:")) return { kind: "event", rawId: id.slice("event:".length) };
-  if (id.startsWith("snapshot:")) return { kind: "snapshot", rawId: id.slice("snapshot:".length) };
-  if (id.startsWith("artifact:")) return { kind: "artifact", rawId: id.slice("artifact:".length) };
   return null;
+}
+
+function EvidenceCitation({ source }: { source: ChatSource }) {
+  const [open, setOpen] = useState(false);
+  const url = safeEvidenceUrl(source.url);
+  return <span className="mx-0.5 inline-flex max-w-full flex-col align-baseline">
+    <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 rounded-full border border-accent/25 bg-accent/8 px-1.5 py-0.5 text-[10px] font-medium text-accent/90" title="Inspect original evidence">{truncateLabel(source.title || source.publisher || source.id)}<ChevronDown className="h-2.5 w-2.5" /></button>
+    {open && <span role="note" className="my-2 block rounded-lg border border-accent/25 bg-surface p-3 text-xs leading-relaxed">
+      <q className="block whitespace-pre-wrap border-l-2 border-accent pl-2">{source.quote}</q>
+      <span className="mt-2 block text-[10px] text-muted">{source.publisher || "Original source"}{source.published_at ? ` · Published ${source.published_at}` : ""}</span>
+      {source.support_status === "unstructured_source" && <span className="mt-1 block text-[10px] text-important">Source excerpt · Not an accepted event assertion</span>}
+      <span className="mt-1 block break-all text-[10px] text-muted">Revision {source.revision || "unknown"}{source.recorded_at ? ` · Captured ${source.recorded_at}` : ""}</span>
+      {url && <a className="mt-2 inline-block text-accent underline" href={url} target="_blank" rel="noreferrer">Open original source</a>}
+    </span>}
+  </span>;
 }
 
 type OnNavigate = (source: ChatSource, nav: NonNullable<ReturnType<typeof parseInternalNav>>) => void;
@@ -112,20 +120,14 @@ function renderChatInline(
       const label = (match[3] ?? match[5] ?? match[6] ?? "").trim();
       const sourceId = match[4];
       const matchedSource = resolveSourceMatch(label, sourceId, sources);
-      // Any bracket token this regex already matched should render as a chip (long titles
-      // like event headlines must not fall through as plain text).
-      const isBracketCitation = (match[3] ?? match[5] ?? match[6]) !== undefined;
-      if (
-        !matchedSource &&
-        !sourceId &&
-        (!isBracketCitation || label.trim().length < 2)
-      ) {
+      if (!matchedSource) {
         parts.push(match[0]);
         lastIndex = match.index + match[0].length;
         continue;
       }
       const displayLabel = truncateLabel(matchedSource?.title || label || sourceId || "Source");
       const nav = parseInternalNav(matchedSource);
+      const sourceUrl = safeEvidenceUrl(matchedSource.url);
 
       const chip = (
         <span className="inline-flex items-center gap-1 rounded-full border border-accent/25 bg-accent/8 px-1.5 py-0.5 text-[10px] font-medium text-accent/90 align-baseline">
@@ -137,12 +139,14 @@ function renderChatInline(
         </span>
       );
 
-      if (matchedSource?.url && !nav) {
+      if (matchedSource.quote) {
+        parts.push(<EvidenceCitation key={`${keyPrefix}-c${match.index}`} source={matchedSource} />);
+      } else if (sourceUrl && !nav) {
         // External link — open in new tab
         parts.push(
           <a
             key={`${keyPrefix}-c${match.index}`}
-            href={matchedSource.url}
+            href={sourceUrl}
             target="_blank"
             rel="noreferrer"
             title={matchedSource.title}
@@ -393,7 +397,7 @@ function renderMarkdownChildren(
   return parts;
 }
 
-function ChatRichText({ content, sources }: { content: string; sources: ChatSource[] }) {
+export function ChatRichText({ content, sources }: { content: string; sources: ChatSource[] }) {
   const activeTopicId = useStore((s) => s.activeTopicId);
   const setAnalysisTab = useStore((s) => s.setAnalysisTab);
   const setSelectedKnowledgeEvent = useStore((s) => s.setSelectedKnowledgeEvent);
@@ -683,6 +687,8 @@ export default function ChatBot({
     setSelectedArticle,
     selectedEventContext,
     setSelectedEventContext,
+    eventMemoryScope,
+    setEventMemoryScope,
     isChatLoading,
     chatOpen,
     setChatOpen,
@@ -711,10 +717,10 @@ export default function ChatBot({
   }, [chatMessages, isChatLoading]);
 
   useEffect(() => {
-    if (selectedArticle || selectedEventContext) {
+    if (selectedArticle || selectedEventContext || eventMemoryScope) {
       inputRef.current?.focus();
     }
-  }, [selectedArticle, selectedEventContext]);
+  }, [selectedArticle, selectedEventContext, eventMemoryScope]);
 
   useEffect(() => {
     if (!chatOpen) {
@@ -753,10 +759,11 @@ export default function ChatBot({
     return () => controller.abort();
   }, [chatOpen, conversationId, chatTask?.running, chatTask?.taskId, applyChatStreamEvent]);
 
-  const hasContext = !!(selectedArticle || selectedEventContext);
-  const contextTitle = selectedEventContext?.title ?? selectedArticle?.title ?? "";
+  const hasContext = !!(selectedArticle || selectedEventContext || eventMemoryScope);
+  const contextTitle = eventMemoryScope?.title ?? selectedEventContext?.title ?? selectedArticle?.title ?? "";
 
   function buildContextString(): string | undefined {
+    if (eventMemoryScope) return undefined;
     if (selectedEventContext) {
       const ec = selectedEventContext;
       return [
@@ -865,10 +872,12 @@ export default function ChatBot({
           >
             <div className="flex items-start justify-between gap-2">
               <p className="text-[11px] text-accent-hover line-clamp-2">
-                {selectedEventContext ? "Event context: " : "Context: "}{contextTitle}
+                {eventMemoryScope ? "Event memory: " : selectedEventContext ? "Event context: " : "Context: "}{contextTitle}
+                {eventMemoryScope?.known_at && <span className="block text-[10px]">Known by {eventMemoryScope.known_at}</span>}
+                {eventMemoryScope?.valid_at && <span className="block text-[10px]">Effective at {eventMemoryScope.valid_at}</span>}
               </p>
               <button
-                onClick={() => { setSelectedArticle(null); setSelectedEventContext(null); }}
+                onClick={() => { setSelectedArticle(null); setSelectedEventContext(null); setEventMemoryScope(null); }}
                 className="text-muted hover:text-foreground shrink-0"
               >
                 <X className="w-3 h-3" />

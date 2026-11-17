@@ -103,7 +103,7 @@ export default function AnalysisPanel({
   useEffect(() => {
     if (activeTopicId == null) return;
     void hydrateLiveSummary(activeTopicId);
-  }, [activeTopicId, hydrateLiveSummary]);
+  }, [activeTopicId, hydrateLiveSummary, refreshKey]);
 
   const handleGenerate = useCallback(() => {
     if (activeTopicId == null || isGenerating || liveActionRunning) return;
@@ -120,9 +120,9 @@ export default function AnalysisPanel({
   const surgeRate = prevCount > 0 ? insight.trend_delta / prevCount : 0;
 
   const alertSignals: { level: "high" | "medium"; text: string }[] = [];
-  if (negativeRate >= 0.4) alertSignals.push({ level: "high", text: `Negative sentiment at ${Math.round(negativeRate * 100)}%` });
-  else if (negativeRate >= 0.3) alertSignals.push({ level: "medium", text: `Negative sentiment elevated at ${Math.round(negativeRate * 100)}%` });
-  if (surgeRate >= 1.0) alertSignals.push({ level: "medium", text: `Volume surge +${Math.round(surgeRate * 100)}% vs previous period` });
+  if (negativeRate >= 0.4) alertSignals.push({ level: "high", text: `Negative media sentiment at ${Math.round(negativeRate * 100)}%` });
+  else if (negativeRate >= 0.3) alertSignals.push({ level: "medium", text: `Negative media sentiment elevated at ${Math.round(negativeRate * 100)}%` });
+  if (surgeRate >= 1.0) alertSignals.push({ level: "medium", text: `Coverage volume +${Math.round(surgeRate * 100)}% vs previous period` });
   if (importantRate >= 0.4) alertSignals.push({ level: "medium", text: `Important article density ${Math.round(importantRate * 100)}%` });
 
   const renderLiveTab = () => (
@@ -170,7 +170,10 @@ export default function AnalysisPanel({
           </div>
         )}
         {aiText && (
-          <AnalysisRichText content={aiText} citations={aiCitations} />
+          <>
+            {liveSlice?.eventMemoryNotice && <p role="status" className={`mb-3 rounded-lg border p-3 text-xs leading-relaxed ${liveSlice.eventMemoryStale ? "border-important/30 bg-important/10 text-important" : "border-border bg-surface-hover text-muted"}`}>{liveSlice.eventMemoryNotice}</p>}
+            <AnalysisRichText content={aiText} citations={aiCitations} />
+          </>
         )}
         {!aiText && !isGenerating && (
           <button
@@ -188,7 +191,7 @@ export default function AnalysisPanel({
       <div className="border-t border-border pt-4 flex items-center justify-between">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-muted flex items-center gap-1.5">
           <BarChart3 className="w-3.5 h-3.5" />
-          Signals
+          Coverage signals
         </h2>
         <div className="flex gap-1">
           {(["24h", "7d"] as const).map((w) => (

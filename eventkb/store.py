@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import threading
 import uuid
 
 
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS memory_policy (
 );
 CREATE INDEX IF NOT EXISTS assertion_event_time ON assertions(event_id, recorded_at, valid_from);
 CREATE INDEX IF NOT EXISTS policy_event_time ON memory_policy(event_id, recorded_at);
+CREATE INDEX IF NOT EXISTS event_topic_time ON events(topic, recorded_at);
 CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
 INSERT OR IGNORE INTO schema_version VALUES (1);
 """
@@ -76,6 +78,7 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.clock = clock
+        self._transactions = threading.local()
         with self.connection() as db:
             db.executescript(SCHEMA)
             # Application and SQL both protect the audit log against accidental mutation.
@@ -86,6 +89,10 @@ class Store:
 
     @contextmanager
     def connection(self, *, write=False):
+        active = getattr(self._transactions, "connection", None)
+        if active is not None:
+            yield active
+            return
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
@@ -99,6 +106,24 @@ class Store:
             raise
         finally:
             db.close()
+
+    @contextmanager
+    def atomic(self):
+        """Compose store and workflow writes in one thread-local transaction.
+
+        Nested store methods share the outer writer lock and commit only when
+        the whole operation succeeds. Other threads still use independent
+        connections, so a stale review cannot race a concurrent writer.
+        """
+        if getattr(self._transactions, "connection", None) is not None:
+            yield
+            return
+        with self.connection(write=True) as db:
+            self._transactions.connection = db
+            try:
+                yield
+            finally:
+                del self._transactions.connection
 
     def _now(self, db):
         now = timestamp(self.clock())
@@ -136,7 +161,9 @@ class Store:
     def add_evidence(self, *, source_key, revision, publisher, url, published_at, body):
         if not all(isinstance(v, str) and v.strip() for v in (source_key, revision, publisher, url, body)):
             raise ValueError("source metadata and body required")
-        published_at = timestamp(published_at)
+        # A source can have explicit event time without a known publication
+        # timestamp. Unknown publication metadata must never be fabricated.
+        published_at = "" if published_at is None or published_at == "" else timestamp(published_at)
         digest = hashlib.sha256(body.encode()).hexdigest()
         with self.connection(write=True) as db:
             old = db.execute("SELECT * FROM evidence WHERE source_key=? AND revision=?", (source_key, revision)).fetchone()
@@ -276,7 +303,12 @@ class Store:
         now = timestamp(self.clock())
         valid_at, known_at = timestamp(valid_at or now), timestamp(known_at or now)
         with self.connection() as db:
-            events = [dict(r) for r in db.execute("SELECT * FROM events WHERE recorded_at<=? ORDER BY id", (known_at,))]
+            sql = "SELECT * FROM events WHERE recorded_at<=?"
+            params = [known_at]
+            if topic is not None:
+                sql += " AND topic=?"
+                params.append(topic)
+            events = [dict(r) for r in db.execute(sql + " ORDER BY id", params)]
         hits = []
         for event in events:
             if topic is not None and event["topic"] != topic:

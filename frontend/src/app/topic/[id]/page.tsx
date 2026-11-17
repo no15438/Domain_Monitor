@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import TopicHeader from "@/components/TopicHeader";
 import ResearchBriefPanel from "@/components/ResearchBriefPanel";
-import EventFeed from "@/components/EventFeed";
+import UpdatesPanel from "@/components/UpdatesPanel";
 import AnalysisPanel from "@/components/AnalysisPanel";
 import ChatBot from "@/components/ChatBot";
 import ErrorBoundary from "@/components/ErrorBoundary";
@@ -44,7 +44,7 @@ export default function TopicDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const briefCollapsed = briefCollapsedByTopic[topicId] ?? false;
+  const briefCollapsed = briefCollapsedByTopic[topicId] ?? !!topic?.research_brief;
   const rawMobilePane = mobilePaneByTopic[topicId] ?? (chatOpen ? "chat" : "feed");
   const activeMobilePane: WorkspacePane =
     rawMobilePane === "chat" && !chatOpen ? "analysis" : rawMobilePane;
@@ -164,8 +164,8 @@ export default function TopicDetailPage() {
         <div className="grid grid-cols-4 gap-1 rounded-xl border border-border bg-background/70 p-1">
           {([
             { key: "brief", label: "Research", icon: FileText },
-            { key: "feed", label: "News", icon: Newspaper },
-            { key: "analysis", label: "Analysis", icon: BarChart3 },
+            { key: "feed", label: "Updates", icon: Newspaper },
+            { key: "analysis", label: "Briefing", icon: BarChart3 },
             { key: "chat", label: "Chat", icon: MessageSquare },
           ] as const).map(({ key, label, icon: Icon }) => {
             const active = activeMobilePane === key;
@@ -197,7 +197,7 @@ export default function TopicDetailPage() {
           />
         </ErrorBoundary>
         <ErrorBoundary>
-          <EventFeed />
+          <UpdatesPanel key={topicId} />
         </ErrorBoundary>
         <ErrorBoundary>
           {chatOpen ? <ChatBot /> : <AnalysisPanel />}
@@ -215,7 +215,7 @@ export default function TopicDetailPage() {
               onPlanApplied={loadTopicWorkspace}
             />
           ) : activeMobilePane === "feed" ? (
-            <EventFeed layout="mobile" />
+            <UpdatesPanel key={topicId} layout="mobile" />
           ) : activeMobilePane === "chat" ? (
             <ChatBot layout="mobile" />
           ) : (

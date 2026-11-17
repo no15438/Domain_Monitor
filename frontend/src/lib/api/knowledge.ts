@@ -110,10 +110,12 @@ export async function fetchSynthesisArtifact(
 
 export async function fetchGlobalOverview(
   topicId: number,
-): Promise<{ content: string | null; citations?: { id: string; type: string; title: string; url: string }[] }> {
+): Promise<{ content: string | null; citations?: { id: string; type: string; title: string; url: string }[]; event_memory_stale?: boolean; event_memory_notice?: string | null }> {
   const artifact = await fetchSynthesisArtifact(topicId, "global-overview");
   return {
     content: artifact?.content ?? null,
+    event_memory_stale: artifact?.event_memory_stale,
+    event_memory_notice: artifact?.event_memory_notice,
     citations: artifact?.metadata?.citations as
       | { id: string; type: string; title: string; url: string }[]
       | undefined,
