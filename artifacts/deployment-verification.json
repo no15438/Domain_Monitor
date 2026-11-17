@@ -1,0 +1,61 @@
+{
+  "status": "ok",
+  "commit": "9225fd63c29825efb6654f362075a656c09cca1f",
+  "checked_at": "2026-11-17T11:14:45.030678+00:00",
+  "frontend": "https://domain-monitor-frontend-no15438-yf92.onrender.com",
+  "backend": "https://domain-monitor-uf81.onrender.com",
+  "checks": [
+    "external calls and scheduler disabled",
+    "event memory mounted",
+    "model configuration reported honestly",
+    "event health through frontend proxy",
+    "browser-created topic readable through proxy",
+    "workspace claims",
+    "workspace evidence",
+    "workspace snapshots",
+    "workspace snapshot-deltas",
+    "workspace claim-lifecycle-audit",
+    "workspace events/active",
+    "workspace events/history",
+    "workspace synthesis/global-overview",
+    "workspace synthesis/evolution-report",
+    "disabled AI fails with English detail before creating a task",
+    "event creation accepts actual frontend origin",
+    "current transition and corrected amount",
+    "historical effective state reconstructed",
+    "known-by cutoff preserves original amount",
+    "topic isolation",
+    "projection is not cached",
+    "projection excludes original evidence bodies",
+    "archived event hidden by default",
+    "archived event recoverable",
+    "restored event visible",
+    "immutable evidence and assertion history retained",
+    "untrusted browser origin rejected"
+  ],
+  "count": 27,
+  "event_id": "english-release-9feb6eca",
+  "event_topic": "Deployment verification (synthetic)",
+  "external_model_or_news_calls": 0,
+  "storage": "ephemeral; no restart durability claimed",
+  "render_deployments": {
+    "frontend": "dep-dbu39krm8hqs73e0b6u0",
+    "backend": "dep-dbu3brfpq7jc739mpkjg",
+    "status": "Live"
+  },
+  "browser_checks": [
+    "English topic creation and workspace navigation",
+    "Chat request blocked with input retained and loading released",
+    "English event details and source citations",
+    "Effective-date selection reconstructs Announced in January",
+    "Historical policy controls are disabled",
+    "English assertion and policy history",
+    "Back to now restores Completed"
+  ],
+  "screenshots": [
+    "deployment-preview.jpg",
+    "deployment-workspace.jpg",
+    "deployment-memory-current.jpg",
+    "deployment-memory-history.jpg"
+  ]
+}
