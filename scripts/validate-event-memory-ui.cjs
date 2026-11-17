@@ -93,7 +93,16 @@ const Page = load('frontend/src/app/event-memory/page.tsx', {
   assert.doesNotMatch(text(), /Event one/);
   assert.doesNotMatch(text(), /Memory policy saved/); // Completion from an unmounted detail stays silent.
 
-  const date = rendered.root.findAllByProps({ type: 'datetime-local' })[0];
+  const date = rendered.root.findAllByProps({ placeholder: 'YYYY-MM-DD HH:mm' })[0];
+  const beforeInvalid = queries.length;
+  await act(async () => date.props.onInput({ currentTarget: { value: 'tomorrow' } }));
+  await act(async () => rendered.root.findAllByType('form')[0].props.onSubmit({ preventDefault() {} }));
+  assert.equal(queries.length, beforeInvalid);
+  assert.match(text(), /Enter dates as YYYY-MM-DD HH:mm/);
+  await act(async () => date.props.onInput({ currentTarget: { value: '2026-02-30 12:00' } }));
+  await act(async () => rendered.root.findAllByType('form')[0].props.onSubmit({ preventDefault() {} }));
+  assert.equal(queries.length, beforeInvalid);
+  assert.match(text(), /Enter a valid date and local time/);
   await act(async () => date.props.onInput({ currentTarget: { value: '2026-01-15T12:00' } }));
   await act(async () => rendered.root.findAllByType('form')[0].props.onSubmit({ preventDefault() {} }));
   assert.ok(queries.at(-1).url.searchParams.get('valid_at'));
@@ -101,5 +110,5 @@ const Page = load('frontend/src/app/event-memory/page.tsx', {
   assert.equal(rendered.root.findByType('fieldset').props.disabled, true);
   assert.equal(api.safeEvidenceUrl('javascript:alert(1)'), undefined);
   await act(async () => rendered.unmount());
-  process.stdout.write(JSON.stringify({ ok: true, checks: ['stale details hidden immediately', 'late query ignored', 'late save cannot revert topic', 'native date input applied; history read-only', 'unsafe source URL rejected'], scope: 'real React page; mocked network; complements live browser checks' }) + '\n');
+  process.stdout.write(JSON.stringify({ ok: true, checks: ['stale details hidden immediately', 'late query ignored', 'late save cannot revert topic', 'invalid date format makes no request', 'invalid calendar date makes no request', 'English date input applied; history read-only', 'unsafe source URL rejected'], scope: 'real React page; mocked network; complements live browser checks' }) + '\n');
 })().catch(error => { console.error(error); process.exitCode = 1; });

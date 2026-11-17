@@ -19,7 +19,7 @@ The free backend uses ephemeral storage under `/tmp/domain-monitor`. This is an 
 - English generation instructions at both regular and streamed model boundaries and in each analysis prompt. Original source text, quotes, user data, identifiers, and stored historical evidence remain unchanged.
 - English fixtures use new IDs/source keys to avoid rewriting older immutable demo evidence.
 - **218 Python tests passed**, including five new mocked provider/Render-host regressions. Three pre-existing fixture warnings remain.
-- **18 frontend behavior checks passed**, including late topic/save responses, historical read-only controls, chat state, and API retries/errors.
+- **20 frontend behavior checks passed**, including late topic/save responses, historical read-only controls, chat state, and API retries/errors.
 - Frontend production build with webpack passed TypeScript and all five routes. The Dockerfile uses that tested build mode.
 - No real model/news calls were made. Provider instruction delivery is tested with mocks; actual provider availability and compliance remain unverified.
 
@@ -34,3 +34,7 @@ Both services are Live at application commit `9225fd6`. All **27 real online API
 Browser acceptance confirmed English topic creation, workspace navigation, chat failure releasing loading while retaining input, current Completed state, January Announced state, historical read-only controls, English evidence/policy history, and return to the current view. The synthetic topic and event remain available until the free instance restarts. No model/news requests were made. See `artifacts/deployment-verification.json` and the four `deployment-*.jpg` screenshots listed there.
 
 Only deployment configuration, documentation, and acceptance artifacts changed after the running application commit; `main` contains those records as well. The dashboard-managed services are not linked to a Blueprint. A future release must trigger and verify each service's deployment rather than assume a `render.yaml` edit is applied automatically.
+
+## Browser-independent date language
+
+Screenshot review found that native date controls used the operating system's Chinese placeholders despite the English document language. Both event-memory interfaces now use the explicit English format `YYYY-MM-DD HH:mm` in local time. Invalid formats, impossible calendar dates, and nonexistent local times are rejected before requesting a projection. The React regression harness adds two cases for invalid format/calendar dates, increasing frontend behavior checks to 20. Singular event/evidence counts also use correct English grammar. The frontend is redeployed for this change; backend behavior remains at `9225fd6`.

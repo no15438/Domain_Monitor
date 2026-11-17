@@ -27,6 +27,18 @@ function valueText(value: JsonValue): string {
 function dateText(value: string) {
   return new Date(value).toLocaleString("en-AU", { timeZone: "Australia/Sydney", hour12: false });
 }
+function localDateTime(value: string): string {
+  if (!value.trim()) return "";
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})$/.exec(value.trim());
+  if (!match) throw new Error("Enter dates as YYYY-MM-DD HH:mm, for example 2026-01-15 12:00.");
+  const parts = match.slice(1).map(Number);
+  const date = new Date(value.trim().replace(" ", "T"));
+  const actual = [date.getFullYear(), date.getMonth() + 1, date.getDate(), date.getHours(), date.getMinutes()];
+  if (parts[0] < 1 || actual.some((part, index) => part !== parts[index])) {
+    throw new Error("Enter a valid date and local time as YYYY-MM-DD HH:mm.");
+  }
+  return date.toISOString();
+}
 
 function EventDetail({ item, result, onSaved }: { item: EventResult; result: QueryResult; onSaved: () => void }) {
   const [history, setHistory] = useState<HistoryResult | null>(null);
@@ -78,7 +90,7 @@ function EventDetail({ item, result, onSaved }: { item: EventResult; result: Que
             <ul className="mt-2 space-y-2">{field.alternatives.map(alt => <li key={alt.id}>
               {valueText(alt.value)} <span className="text-xs text-muted">· Evidence {item.citations.find(c => c.id === alt.evidence_id)?.source_key || alt.evidence_id}</span>
             </li>)}</ul>
-          </div> : <div><p>{valueText(field.value)}</p><p className="mt-1 text-xs text-muted">Recorded values agree · {field.evidence_ids.length} evidence records (not externally verified)</p></div>}
+          </div> : <div><p>{valueText(field.value)}</p><p className="mt-1 text-xs text-muted">Recorded values agree · {field.evidence_ids.length} {field.evidence_ids.length === 1 ? "evidence record" : "evidence records"} (not externally verified)</p></div>}
         </dd>
       </div>)}
     </dl>
@@ -131,6 +143,7 @@ export default function EventMemoryPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [dateError, setDateError] = useState("");
   const [notice, setNotice] = useState("");
   const [refresh, setRefresh] = useState(0);
 
@@ -159,11 +172,13 @@ export default function EventMemoryPage() {
   }, [scope]);
 
   function apply(event: FormEvent) {
-    event.preventDefault(); setNotice("");
-    setScope({ topic, q: query.trim(), valid_at: valid ? new Date(valid).toISOString() : "", known_at: known ? new Date(known).toISOString() : "", include_archived: archived });
+    event.preventDefault(); setNotice(""); setDateError("");
+    try {
+      setScope({ topic, q: query.trim(), valid_at: localDateTime(valid), known_at: localDateTime(known), include_archived: archived });
+    } catch (error) { setDateError(error instanceof Error ? error.message : "Check the date format and try again."); }
   }
   function current() {
-    setValid(""); setKnown(""); setNotice("");
+    setValid(""); setKnown(""); setNotice(""); setDateError("");
     setScope({ topic, q: query.trim(), valid_at: "", known_at: "", include_archived: archived });
   }
   const result = loadedScope === scope ? response : null;
@@ -176,20 +191,21 @@ export default function EventMemoryPage() {
       <div><p className="text-xs uppercase tracking-widest text-accent">Domain Monitor · Event Memory</p><h1 className="mt-2 text-2xl font-semibold">Event Memory</h1><p className="mt-2 text-sm text-muted">Track changes to an event and reconstruct its facts and evidence over time.</p></div>
       <form onSubmit={apply} className={`${box} space-y-4`}>
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <label className="text-sm">Topic<select className={`${input} mt-1`} value={topic} onChange={e => { const next = e.target.value; setTopic(next); setQuery(""); setValid(""); setKnown(""); setArchived(false); setNotice(""); setScope({ topic: next, q: "", valid_at: "", known_at: "", include_archived: false }); }}><option value="" disabled>Select topic</option>{topics.map(t => <option key={t}>{t}</option>)}</select></label>
+          <label className="text-sm">Topic<select className={`${input} mt-1`} value={topic} onChange={e => { const next = e.target.value; setTopic(next); setQuery(""); setValid(""); setKnown(""); setArchived(false); setNotice(""); setDateError(""); setScope({ topic: next, q: "", valid_at: "", known_at: "", include_archived: false }); }}><option value="" disabled>Select topic</option>{topics.map(t => <option key={t}>{t}</option>)}</select></label>
           <label className="text-sm">Search<input className={`${input} mt-1`} value={query} onChange={e => setQuery(e.target.value)} placeholder="Event name or confirmed field value" /></label>
-          <label className="text-sm">Effective at (local time)<input className={`${input} mt-1`} type="datetime-local" value={valid} onInput={e => setValid(e.currentTarget.value)} onChange={e => setValid(e.target.value)} /></label>
-          <label className="text-sm">Known by (local time)<input className={`${input} mt-1`} type="datetime-local" value={known} onInput={e => setKnown(e.currentTarget.value)} onChange={e => setKnown(e.target.value)} /></label>
+          <label className="text-sm">Effective at (local time)<input className={`${input} mt-1`} type="text" placeholder="YYYY-MM-DD HH:mm" value={valid} onInput={e => setValid(e.currentTarget.value)} onChange={e => setValid(e.target.value)} /></label>
+          <label className="text-sm">Known by (local time)<input className={`${input} mt-1`} type="text" placeholder="YYYY-MM-DD HH:mm" value={known} onInput={e => setKnown(e.currentTarget.value)} onChange={e => setKnown(e.target.value)} /></label>
         </div>
         <div className="flex flex-wrap items-center gap-3"><label className="mr-auto flex items-center gap-2 text-sm"><input type="checkbox" checked={archived} onChange={e => setArchived(e.target.checked)} />Include archived events</label><button className={button} disabled={!topic}>Search</button><button className={button} type="button" onClick={current} disabled={!topic}>Back to now</button></div>
         <p className="text-xs text-muted">Leave dates blank for now. Effective time selects the state at that time; known-by time limits the evidence available to reconstruct it.</p>
+        {dateError && <p role="alert" className="text-sm text-negative">{dateError}</p>}
       </form>
       {notice && <p role="status" className="text-sm text-positive">{notice}</p>}
       {loading && <p role="status" className={box}>Loading events…</p>}
       {error && <div role="alert" className={box}><p>{error}</p><button className={`${button} mt-3`} onClick={() => scope ? setScope({ ...scope }) : setRefresh(n => n + 1)}>Retry</button></div>}
       {!loading && !error && !result && <p className={box}>No events are available yet.</p>}
       {result && <>
-        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted"><strong className="text-foreground">{result.scope.mode === "current" ? "Current view" : "Historical view"} · {result.total} events</strong><span>Effective: {dateText(result.scope.valid_at)}</span><span>Known by: {dateText(result.scope.known_at)} (Sydney time)</span></div>
+        <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted"><strong className="text-foreground">{result.scope.mode === "current" ? "Current view" : "Historical view"} · {result.total} {result.total === 1 ? "event" : "events"}</strong><span>Effective: {dateText(result.scope.valid_at)}</span><span>Known by: {dateText(result.scope.known_at)} (Sydney time)</span></div>
         {result.truncated && <p className="text-sm text-important">Showing the first 100 events. Narrow your search for more specific results.</p>}
         {result.results.length === 0 ? <p className={box}>No matching events. Clear the search, adjust the dates, or include archived events.</p> : <div className="grid items-start gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
           <nav aria-label="Event list" className="space-y-3">{result.results.map(e => <button key={e.event.id} onClick={() => setSelected(e.event.id)} aria-pressed={selected === e.event.id} className={`${box} w-full text-left ${selected === e.event.id ? "ring-2 ring-accent" : "hover:bg-surface-hover"}`}>
