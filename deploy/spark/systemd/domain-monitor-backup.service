@@ -1,0 +1,8 @@
+[Unit]
+Description=Consistent Domain Monitor database and vector backup
+After=domain-monitor.service
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/bash /srv/domain-monitor/app/scripts/backup-spark.sh
+TimeoutStartSec=600

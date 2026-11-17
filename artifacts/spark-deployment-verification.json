@@ -1,0 +1,50 @@
+{
+  "checked_at": "2026-11-17T12:05:31.322718+00:00",
+  "frontend": "http://spark-f74d.local:3870",
+  "runtime": {
+    "external_calls_enabled": true,
+    "scheduler_enabled": true,
+    "model_configured": true,
+    "event_memory_enabled": true
+  },
+  "container_health": [
+    "domain-monitor-frontend-1 Up 2 minutes (healthy)",
+    "domain-monitor-backend-1 Up About a minute (healthy)"
+  ],
+  "python_tests": 226,
+  "frontend_behavior_checks": 20,
+  "system_checks": 39,
+  "real_services_checks": 9,
+  "event_memory_api_checks": 26,
+  "restart_projection_checks": 8,
+  "stream_checks": 2,
+  "backup_restore": {
+    "restored_to": "/srv/domain-monitor/restore-verification-20261117",
+    "databases": {
+      "data/eventkb.sqlite3": "ok",
+      "data/ai-usage.sqlite3": "ok",
+      "data/monitor.db": "ok",
+      "data/chroma/chroma.sqlite3": "ok"
+    },
+    "checksum": "ok"
+  },
+  "restored_vector_counts": {
+    "events": 4,
+    "evidence": 8,
+    "claims": 8,
+    "snapshots": 1,
+    "artifacts": 0
+  },
+  "offline_semantic_results": 2,
+  "latest_consistent_backup_duration_seconds": 11,
+  "mac_backup_mirror": "three archives verified; daily login job last exit 0",
+  "english_browser_acceptance": [
+    "news and research setup",
+    "saved summary",
+    "chat history after container replacement",
+    "working live stream through mDNS origin"
+  ],
+  "screenshot": "artifacts/spark-workspace.jpg",
+  "cloud_subscription_purchased": false,
+  "scope": "Alibaba AI, news collection and durable Spark LAN deployment; legacy AI store remains separate from field-level event memory"
+}

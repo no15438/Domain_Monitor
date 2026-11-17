@@ -1,8 +1,37 @@
 import re
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
 
 from config import settings
 
 _client = None
+
+
+def _reserve_request():
+    """Persistent, atomic daily ceiling shared by manual and scheduled calls."""
+    limit = settings.llm_daily_request_limit
+    if not limit:
+        return
+    path = Path(settings.database_path).with_name("ai-usage.sqlite3")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path, timeout=15) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS usage (day TEXT PRIMARY KEY, requests INTEGER NOT NULL)")
+        conn.execute("BEGIN IMMEDIATE")
+        day = datetime.now(timezone.utc).date().isoformat()
+        row = conn.execute("SELECT requests FROM usage WHERE day = ?", (day,)).fetchone()
+        if row and row[0] >= limit:
+            raise RuntimeError("Daily AI request limit reached. Try again tomorrow or adjust the configured limit.")
+        conn.execute("INSERT INTO usage VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET requests = requests + 1", (day,))
+
+
+def _request_options(timeout):
+    options = {"timeout": timeout or settings.llm_timeout_seconds,
+               "max_tokens": settings.llm_max_tokens}
+    if settings.llm_provider == "dashscope":
+        # Hybrid Qwen models otherwise spend output tokens on hidden reasoning.
+        options["extra_body"] = {"enable_thinking": False}
+    return options
 
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
 ENGLISH_OUTPUT_POLICY = (
@@ -50,7 +79,7 @@ def _get_client():
         from openai import OpenAI
 
         if provider == "openai":
-            _client = OpenAI(api_key=settings.openai_api_key)
+            _client = OpenAI(api_key=settings.openai_api_key, timeout=settings.llm_timeout_seconds, max_retries=1)
         elif provider == "lmstudio":
             _client = OpenAI(
                 base_url=settings.lmstudio_base_url.rstrip("/"),
@@ -66,6 +95,7 @@ def _get_client():
             _client = OpenAI(
                 base_url=settings.dashscope_base_url,
                 api_key=settings.dashscope_api_key,
+                timeout=settings.llm_timeout_seconds, max_retries=0,
             )
     elif provider == "anthropic":
         from anthropic import Anthropic
@@ -107,6 +137,7 @@ def llm_chat(
     OpenAI-compatible providers.  Anthropic silently ignores this flag.
     """
     client = _get_client()
+    _reserve_request()
     provider = settings.llm_provider
     messages = _english_messages(messages)
 
@@ -114,8 +145,7 @@ def llm_chat(
         kwargs: dict = {"model": _model(), "messages": messages, "temperature": temperature}
         if response_format is not None:
             kwargs["response_format"] = response_format
-        if timeout is not None:
-            kwargs["timeout"] = timeout
+        kwargs.update(_request_options(timeout))
         resp = client.chat.completions.create(**kwargs)
         return _strip_thinking(resp.choices[0].message.content or "")
 
@@ -146,6 +176,7 @@ def llm_chat_stream(
 ):
     """Yields text chunks, filtering out <think>…</think> blocks."""
     client = _get_client()
+    _reserve_request()
     provider = settings.llm_provider
     messages = _english_messages(messages)
 
@@ -182,12 +213,13 @@ def llm_chat_stream(
             "temperature": temperature,
             "stream": True,
         }
-        if timeout is not None:
-            kwargs["timeout"] = timeout
+        kwargs.update(_request_options(timeout))
         stream = client.chat.completions.create(**kwargs)
 
         def _raw():
             for chunk in stream:
+                if not chunk.choices:
+                    continue
                 delta = chunk.choices[0].delta.content
                 if delta:
                     yield delta

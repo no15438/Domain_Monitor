@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily Domain Monitor backup
+[Timer]
+OnCalendar=*-*-* 04:00:00 Australia/Sydney
+Persistent=true
+RandomizedDelaySec=120
+[Install]
+WantedBy=timers.target

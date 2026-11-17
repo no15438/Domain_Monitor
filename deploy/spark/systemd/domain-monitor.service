@@ -1,0 +1,15 @@
+[Unit]
+Description=Domain Monitor private LAN stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/srv/domain-monitor/app
+ExecStart=/usr/bin/docker compose --env-file /srv/domain-monitor/config/deployment.env -f compose.spark.yaml up -d --wait
+ExecStop=/usr/bin/docker compose --env-file /srv/domain-monitor/config/deployment.env -f compose.spark.yaml stop
+TimeoutStartSec=300
+TimeoutStopSec=180
+[Install]
+WantedBy=multi-user.target

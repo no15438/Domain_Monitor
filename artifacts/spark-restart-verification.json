@@ -1,0 +1,15 @@
+{
+  "checked_at": 1794917042.9751282,
+  "checks": [
+    "/api/topics",
+    "/api/articles?topic_id=1&limit=100",
+    "/api/topics/1/ai-summary",
+    "/api/topics/1/chat/latest",
+    "/api/topics/1/events/history",
+    "/api/topics/1/evidence",
+    "/api/topics/1/claims",
+    "/api/event-memory/query?topic=Deployment+verification+%28synthetic%29"
+  ],
+  "count": 8,
+  "result": "identical content after forced recreation"
+}

@@ -1,0 +1,51 @@
+# Private LAN deployment. Run from a dedicated /srv/domain-monitor/app checkout.
+name: domain-monitor
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: domain-monitor-backend:local
+    env_file: ${DOMAIN_MONITOR_ROOT:-/srv/domain-monitor}/config/backend.env
+    environment:
+      DATABASE_PATH: /app/data/monitor.db
+      CHROMA_PERSIST_DIR: /app/data/chroma
+      EVENT_MEMORY_DATABASE_PATH: /app/data/eventkb.sqlite3
+      EVENT_MEMORY_ENABLED: "true"
+      PERSISTENT_DATA_ROOT: /app/data
+      ANONYMIZED_TELEMETRY: "false"
+    volumes:
+      - ${DOMAIN_MONITOR_ROOT:-/srv/domain-monitor}/data:/app/data
+      - ${DOMAIN_MONITOR_ROOT:-/srv/domain-monitor}/cache/chroma:/root/.cache/chroma
+    restart: unless-stopped
+    stop_grace_period: 120s
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+      start_interval: 3s
+    logging:
+      options: {max-size: "10m", max-file: "3"}
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        INTERNAL_API_BASE: http://backend:8000
+    image: domain-monitor-frontend:local
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    ports: ["${DOMAIN_MONITOR_BIND:-127.0.0.1}:3870:3000"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+      start_interval: 3s
+    logging:
+      options: {max-size: "10m", max-file: "3"}

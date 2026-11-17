@@ -1,11 +1,11 @@
-FROM node:20-slim AS deps
+FROM node:24-slim AS deps
 
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 RUN npm ci
 
-FROM node:20-slim AS builder
+FROM node:24-slim AS builder
 
 WORKDIR /app
 
@@ -21,7 +21,7 @@ COPY . .
 
 RUN npm run build -- --webpack
 
-FROM node:20-slim AS runner
+FROM node:24-slim AS runner
 
 WORKDIR /app
 

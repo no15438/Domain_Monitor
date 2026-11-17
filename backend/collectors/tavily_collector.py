@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from config import settings
+from search_budget import reserve_search
 
 log = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ def _get_client():
 
 
 def collect(keyword: str, max_results: int = 5) -> list[dict]:
-    if not settings.tavily_api_key:
+    if not settings.tavily_api_key or not reserve_search():
         return []
 
     client = _get_client()
@@ -28,6 +29,8 @@ def collect(keyword: str, max_results: int = 5) -> list[dict]:
     try:
         response = client.search(
             query=keyword,
+            timeout=20,
+            search_depth="basic",
             max_results=max_results,
             topic="news",
             days=7,

@@ -1,0 +1,21 @@
+{
+  "checked_at": "2026-11-17T11:46:42.600641+00:00",
+  "base": "http://192.168.1.116:3870",
+  "checks": [
+    "Alibaba deployment reports configured AI and enabled collection/scheduling",
+    "Real Qwen research plan saved in English",
+    "Real news collected, enriched and persisted",
+    "News keeps source URLs and English AI analysis",
+    "News produced persisted event cards",
+    "News produced source evidence",
+    "News produced analytical claims",
+    "Real English AI summary persisted",
+    "Real chat completes and persists English answer"
+  ],
+  "count": 9,
+  "topic_id": 1,
+  "article_count": 21,
+  "event_count": 2,
+  "conversation_id": 1,
+  "external_calls": "Real Alibaba AI and configured public-news services"
+}

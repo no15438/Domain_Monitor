@@ -35,8 +35,12 @@ class Settings(BaseSettings):
     # Mainland China: https://dashscope.aliyuncs.com/compatible-mode/v1
     # International:   https://dashscope-intl.aliyuncs.com/compatible-mode/v1
     dashscope_base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+    llm_timeout_seconds: float = Field(default=90, gt=0, le=300)
+    llm_max_tokens: int = Field(default=4096, ge=64, le=16384)
+    llm_daily_request_limit: int = Field(default=0, ge=0)
 
     tavily_api_key: Optional[str] = None
+    tavily_daily_request_limit: int = Field(default=0, ge=0)
     newsapi_key: Optional[str] = None
     event_registry_api_key: Optional[str] = None
 
@@ -45,8 +49,10 @@ class Settings(BaseSettings):
     tavily_exclude_domains: str = "wikipedia.org,baike.baidu.com,baidu.com,wikiwand.com,britannica.com,zhihu.com"
 
     monitor_keywords: str = "artificial intelligence,machine learning"
-    fetch_interval_minutes: int = 15
-    max_results_per_keyword: int = 15
+    fetch_interval_minutes: int = Field(default=60, ge=5)
+    max_results_per_keyword: int = Field(default=5, ge=1, le=20)
+    max_search_terms: int = Field(default=8, ge=1, le=30)
+    max_enrich_per_run: int = Field(default=6, ge=1, le=12)
 
     event_cluster_threshold: float = 0.38
     scoring_weights: str = "authority=0.35,coverage=0.25,rank_proxy=0.20,freshness=0.10,originality=0.10"
@@ -59,6 +65,7 @@ class Settings(BaseSettings):
     # Event adapter. Public deployments explicitly allow their own hostname.
     event_memory_enabled: bool = False
     event_memory_database_path: str = "data/eventkb.sqlite3"
+    persistent_data_root: Optional[str] = None
     event_memory_hosts: str = Field(default_factory=lambda: ",".join(filter(None, [
         "localhost", "127.0.0.1", "backend", "testserver", os.getenv("RENDER_EXTERNAL_HOSTNAME")
     ])))
@@ -78,3 +85,15 @@ class Settings(BaseSettings):
     )
 
 settings = Settings()
+
+
+def validate_storage():
+    """Production refuses to start on an accidentally unmounted data directory."""
+    if not settings.persistent_data_root:
+        return
+    root = Path(settings.persistent_data_root).resolve()
+    if not os.path.ismount(root):
+        raise RuntimeError("Persistent data volume is not mounted; refusing to use temporary storage.")
+    for value in (settings.database_path, settings.chroma_persist_dir, settings.event_memory_database_path):
+        if not Path(value).resolve().is_relative_to(root):
+            raise RuntimeError("All data paths must be inside the persistent data volume.")

@@ -456,6 +456,8 @@ async def lifespan(_app: FastAPI):
     set_event_loop(asyncio.get_running_loop())
     global _chat_stream_loop
     _chat_stream_loop = asyncio.get_running_loop()
+    from config import validate_storage
+    validate_storage()
     init_db(settings.database_path)
     task_cleanup_stale(timeout_minutes=30)
     chat_recover_interrupted_tasks()
@@ -707,11 +709,13 @@ async def stream(request: Request):
 
     async def generator():
         try:
+            # Flush proxy headers immediately, including when no news has arrived.
+            yield ": connected\n\n"
             while True:
                 if await request.is_disconnected():
                     break
                 try:
-                    data = await asyncio.wait_for(queue.get(), timeout=30)
+                    data = await asyncio.wait_for(queue.get(), timeout=15)
                     yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
@@ -722,7 +726,7 @@ async def stream(request: Request):
     return StreamingResponse(
         generator(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-import feedparser
+from .feed_reader import read_feed
 from html import unescape
 from urllib.parse import quote_plus
 import re
@@ -23,7 +23,7 @@ def collect(keyword: str, max_results: int = 20, lang: str = "en") -> list[dict]
         f"?q={quote_plus(keyword)}+when:7d&hl={lang}"
     )
     try:
-        feed = feedparser.parse(url)
+        feed = read_feed(url)
     except Exception as e:
         log.warning("parse error for '%s': %s", keyword, e)
         return []

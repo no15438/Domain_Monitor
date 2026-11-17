@@ -70,7 +70,7 @@ from relevance import (
 )
 from config import settings
 
-from collectors import newsapi_collector, rss_collector, googlenews_collector, eventregistry_collector
+from collectors import newsapi_collector, rss_collector, googlenews_collector, eventregistry_collector, tavily_collector
 
 BATCH_ENRICH_PROMPT = """You are a research analyst. Analyze the following {n} articles against the research context.
 
@@ -283,13 +283,26 @@ def _collect_for_keywords(keyword_list: list[str], max_per_source: int) -> list[
                 return _tag(googlenews_collector.collect(kw, max_results=max_per_source), "googlenews")
             if source == "newsapi":
                 return _tag(newsapi_collector.collect(kw, max_results=max_per_source), "newsapi")
+            if source == "tavily":
+                return _tag(tavily_collector.collect(kw, max_results=max_per_source), "tavily")
             # eventregistry
             return _tag(eventregistry_collector.collect(kw, max_events=max_per_source), "eventregistry")
         except Exception as e:
             log.warning("collect error [%s/%s]: %s", source, kw, e)
             return []
 
-    tasks = [(src, kw) for kw in keyword_list for src in ("googlenews", "newsapi", "eventregistry")]
+    sources = ["googlenews"]
+    if settings.newsapi_key:
+        sources.append("newsapi")
+    if settings.event_registry_api_key:
+        sources.append("eventregistry")
+    if settings.tavily_api_key:
+        sources.append("tavily")
+    terms = list(dict.fromkeys(k.strip() for k in keyword_list if k.strip()))[:settings.max_search_terms]
+    tasks = [(src, kw) for kw in terms for src in sources]
+    if not tasks:
+        return []
+    max_per_source = min(max_per_source, settings.max_results_per_keyword)
     raw: list[dict] = []
     # Cap workers: each task is pure network I/O, 8–12 concurrent is safe
     workers = min(len(tasks), 12)
@@ -433,7 +446,7 @@ def _cluster_and_select(items: list[dict], cluster_threshold: float | None = Non
         clusters,
         total_collected=total,
         weights=weights,
-        max_canonicals=MAX_ENRICH,
+        max_canonicals=min(MAX_ENRICH, settings.max_enrich_per_run),
     )
     return clusters, canonicals
 

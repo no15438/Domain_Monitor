@@ -3,6 +3,7 @@ Pipeline data collection uses dedicated collectors instead."""
 
 from tavily import TavilyClient
 from config import settings
+from search_budget import reserve_search
 
 _client = None
 
@@ -15,11 +16,14 @@ def _get_client():
 
 
 def search(query: str, max_results: int = 5) -> list[dict]:
+    if not settings.tavily_api_key or not reserve_search():
+        return []
     client = _get_client()
     exclude = [d.strip() for d in settings.tavily_exclude_domains.split(",") if d.strip()]
 
     response = client.search(
         query=query,
+        timeout=20,
         max_results=max_results,
         exclude_domains=exclude or None,
     )
