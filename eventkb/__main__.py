@@ -6,12 +6,14 @@ from .server import make_server
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Domain Monitor EventKB — local/offline phase 1")
+    parser = argparse.ArgumentParser(description="Domain Monitor EventKB — local/offline")
     parser.add_argument("--db",default="data/eventkb.sqlite3")
     commands = parser.add_subparsers(dest="command",required=True)
     commands.add_parser("demo", help="seed synthetic events; never import old data")
     server = commands.add_parser("serve")
     server.add_argument("--port",type=int,default=8769)
+    api = commands.add_parser("api", help="FastAPI adapter, no legacy scheduler or model clients")
+    api.add_argument("--port",type=int,default=8770)
     memory = commands.add_parser("memory")
     memory.add_argument("--out",default="memory")
     show = commands.add_parser("show")
@@ -33,6 +35,10 @@ def main():
                 server.serve_forever()
             except KeyboardInterrupt:
                 pass
+    elif args.command == "api":
+        import uvicorn
+        from .api import create_app
+        uvicorn.run(create_app(store), host="127.0.0.1", port=args.port)
 
 
 if __name__ == "__main__":

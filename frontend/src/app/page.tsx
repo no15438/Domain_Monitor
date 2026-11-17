@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, Loader2, Plus, Radar, RefreshCw, X } from "lucide-react";
 import {
@@ -199,6 +200,7 @@ export default function Home() {
           <p className="text-[11px] text-muted">AI-powered industry intelligence</p>
         </div>
         <div className="flex-1" />
+        <Link href="/event-memory" prefetch={false} className="text-sm text-accent hover:underline">事件记忆</Link>
         <ThemeToggle />
       </header>
 

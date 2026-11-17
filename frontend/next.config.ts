@@ -10,6 +10,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
+        source: "/api/event-memory/:path*",
+        destination: `${process.env.EVENT_MEMORY_API_BASE?.replace(/\/$/, "") || backendOrigin}/api/event-memory/:path*`,
+      },
+      {
         source: "/api/:path*",
         destination: `${backendOrigin}/api/:path*`,
       },

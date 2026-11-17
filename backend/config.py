@@ -53,6 +53,9 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:3000"
     log_level: str = "INFO"
+    # Local opt-in adapter. Requires the repository root on PYTHONPATH.
+    event_memory_enabled: bool = False
+    event_memory_database_path: str = "data/eventkb.sqlite3"
 
     model_config = SettingsConfigDict(
         env_file=str(_BACKEND_DIR / ".env"),

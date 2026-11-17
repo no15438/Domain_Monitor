@@ -1,0 +1,4 @@
+# Optional API adapter; the event store and original offline UI remain standard-library only.
+fastapi==0.163.1
+uvicorn==0.54.0
+httpx==0.28.1

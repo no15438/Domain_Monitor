@@ -1,5 +1,15 @@
 # 分支盘点与管理建议
 
+## 2026-11-17 当前状态
+
+此前部署分支的七个提交已快进合入并推送 main。此次续做已读回远端：仅 `main`，SHA 为 `2529f3f023a0a411c3b749d462eb9e29f610a826`。本地 main 也在该提交，原目录已切到 main；README 和 data 继续保留。
+
+此前已安全删除本地 `deploy`、`feat/knowledge-lineage-refactor`、`feat/topic-mobile-research-news-20260404`、`feat/render-blueprint-deploy`，以及远端 `feat/render-blueprint-deploy`。事件记忆仍在独立 worktree 的 `feat/event-memory-v1`，首阶段提交 `b07cdef`，本次第二阶段继续本地保存，未推送。下文保留原审计快照，不能作为当前分支清单。
+
+第二阶段已通过受支持的接口将该 worktree 关联到当前本机聊天，并从附件列表核实。该关联不移动目录，也不改变侧边栏同名项目的根路径。
+
+## 首阶段历史审计（清理前）
+
 审计时间：2026-11-16 UTC。完整只读证据：`artifacts/branch-audit.json`。该快照在事件记忆第一阶段的本地提交前生成。
 
 已执行的发布只有前端修复：`2529f3f023a0a411c3b749d462eb9e29f610a826` 普通快进推送到 `origin/feat/render-blueprint-deploy`。推送前远端为 `47b0949`，两者严格相差一个提交，修改文件严格为 `EventFeed.tsx` 与 `useStore.ts`。推送后通过 `ls-remote --heads` 读回目标 SHA。没有强推；没有推送事件重构分支。

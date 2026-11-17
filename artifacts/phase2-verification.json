@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-17",
+  "timezone": "Australia/Sydney",
+  "branch": "feat/event-memory-v1",
+  "base_commit": "b07cdef586bb0e5705eb87461540c34112a3e4e2",
+  "tests": {
+    "python_unittest": {
+      "passed": 31,
+      "api_cases": 11,
+      "existing_cases": 20
+    },
+    "typescript_full_project": "passed with an independent npm-ci dependency installation",
+    "production_next_build": "passed on final source; /event-memory generated",
+    "existing_topic_isolation_harness": "passed, 4 behavioral checks",
+    "event_memory_react_harness": "passed, 5 checks: hide previous scope, ignore late query, ignore save callback after topic switch, native date input and historical read-only, reject unsafe evidence links",
+    "browser": "passed: current completed; January announced; unknown-at cutoff empty; both conflict alternatives and sources retained; archive hidden; include_archived recalled; restore to summary; policy audit retained; switching topics clears detail and history; no console errors/warnings",
+    "http_after_restart": "page and query through the Next.js proxy returned 200 and completed state",
+    "legacy_full_runtime": "not started: scheduler and provider clients intentionally excluded; real main mount block tested in isolation"
+  },
+  "source_backup": "/Users/no15438/Documents/ChatGPT/Domain Monitor/Backups/domain-monitor-phase2-20261117.tar.gz",
+  "worktree_attachment": {
+    "success": true,
+    "verified_in_current_chat_artifacts": true,
+    "path": "/Users/no15438/Documents/Codex/2026-11-17/task/Domain_Monitor_EventMemory",
+    "sidebar_project_root_changed": false
+  },
+  "original_protected_files_sha256_unchanged": true,
+  "changed_text_files_credential_scan": "no matching credential patterns",
+  "remote_heads_readback": {
+    "main": "2529f3f023a0a411c3b749d462eb9e29f610a826"
+  },
+  "git_write_status": "Cloud-only Git pack downloaded using macOS brctl; PACK header, byte count, SHA-1 trailer and git verify-pack passed; git diff --check passed. No refs reset, no history rewritten.",
+  "refactor_pushed": false,
+  "deployed": false,
+  "model_calls": 0,
+  "not_implemented": [
+    "legacy chat replacement",
+    "real data migration",
+    "automatic event extraction/identity matching",
+    "assertion review UI",
+    "partial-interval correction/retraction",
+    "automatic Markdown refresh",
+    "production auth/deployment packaging",
+    "scalable search/paging beyond bounded response"
+  ]
+}

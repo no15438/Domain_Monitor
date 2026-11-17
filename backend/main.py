@@ -466,6 +466,12 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Domain Monitor API", lifespan=lifespan)
 
+if settings.event_memory_enabled:
+    from eventkb.api import ROOT, install
+    from eventkb import Store
+
+    install(app, store=Store(ROOT / settings.event_memory_database_path))
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins.split(","),
