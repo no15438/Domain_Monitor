@@ -1,6 +1,5 @@
 {
   "status": "ok",
-  "commit": "9225fd63c29825efb6654f362075a656c09cca1f",
   "checked_at": "2026-11-17T11:14:45.030678+00:00",
   "frontend": "https://domain-monitor-frontend-no15438-yf92.onrender.com",
   "backend": "https://domain-monitor-uf81.onrender.com",
@@ -39,7 +38,7 @@
   "external_model_or_news_calls": 0,
   "storage": "ephemeral; no restart durability claimed",
   "render_deployments": {
-    "frontend": "dep-dbu39krm8hqs73e0b6u0",
+    "frontend": "dep-dbu3jj8u01pc73diqj00",
     "backend": "dep-dbu3brfpq7jc739mpkjg",
     "status": "Live"
   },
@@ -50,12 +49,28 @@
     "Effective-date selection reconstructs Announced in January",
     "Historical policy controls are disabled",
     "English assertion and policy history",
-    "Back to now restores Completed"
+    "Back to now restores Completed",
+    "Date placeholders remain English regardless of browser language",
+    "Invalid calendar date shows English error without changing projection",
+    "English date format converts Sydney noon to 01:00 UTC"
   ],
   "screenshots": [
     "deployment-preview.jpg",
     "deployment-workspace.jpg",
     "deployment-memory-current.jpg",
     "deployment-memory-history.jpg"
+  ],
+  "backend_commit": "9225fd63c29825efb6654f362075a656c09cca1f",
+  "frontend_commit": "6c8efacf157125556b9ba6840abcd1194a04d7b4",
+  "frontend_rechecked_at": "2026-11-17T11:28:44.031772+00:00",
+  "local_checks": {
+    "python_tests": 218,
+    "frontend_behavior_checks": 20,
+    "production_build": "passed"
+  },
+  "frontend_release_smoke_checks": [
+    "English document language and both explicit date placeholders",
+    "Runtime proxy preserves disabled external-call boundary",
+    "Existing event projection retained after frontend-only rollout"
   ]
 }
