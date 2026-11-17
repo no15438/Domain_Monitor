@@ -53,7 +53,7 @@ Preserve `/srv/domain-monitor/{config,data,cache,backups}` during upgrades. Upda
 
 Branch `feat/event-memory-workflow` integrates collection, retained source revisions, ModelRelease candidates, field-level event memory, Updates, review and source-bound question answering. Other domains retain the existing research and analysis features. See `WORKFLOW_IMPLEMENTATION.md` for the implemented boundary and review policy.
 
-Local verification passed 279 Python tests, 38 frontend behavior checks, 39 isolated system checks and 40 isolated workflow checks. The offline workflow checks use synthetic inputs with real temporary stores and no outbound network access; they do not measure production extraction accuracy. Six Python deprecation warnings remain.
+Local verification passed 287 Python tests, 38 frontend behavior checks, 39 isolated system checks and 40 isolated workflow checks. The offline workflow checks use synthetic inputs with real temporary stores and no outbound network access; they do not measure production extraction accuracy. Six Python deprecation warnings remain.
 
 ## Previous deployment acceptance
 

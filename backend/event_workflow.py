@@ -608,7 +608,12 @@ class Workflow:
     def search_documents(self, topic_id, q="", known_at=None, limit=8):
         self.topic_key(topic_id)
         cutoff = timestamp(known_at or self.store.clock())
-        terms = [_normal(t) for t in re.findall(r"[\w.]+", q) if len(t) > 1]
+        def document_tokens(text):
+            tokens = _search_tokens(text)
+            # Hyphen splitting exposes Qwen4 inside Qwen4-Max; split that
+            # joined identifier too so a family query for Qwen can recall it.
+            return tokens | {part for token in tokens for part in _search_tokens(token)}
+        terms = document_tokens(q)
         with self.store.connection() as db:
             rows = db.execute("SELECT d.*,t.captured_at topic_captured_at FROM workflow_documents d "
                               "JOIN workflow_topic_documents t ON t.revision_id=d.id WHERE t.topic_id=? AND t.captured_at<=? "
@@ -616,8 +621,8 @@ class Workflow:
         scored = []
         for raw in rows:
             row = dict(raw)
-            text = _normal(row["body"])
-            hits = sum(bool(re.search(r"(?<!\w)" + re.escape(term) + r"(?!\w)", text)) for term in terms)
+            tokens = document_tokens(row["body"])
+            hits = len(terms.intersection(tokens))
             if terms and not hits:
                 continue
             row.update(url=row["original_url"], revision=row["id"], score=hits)

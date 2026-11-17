@@ -339,3 +339,91 @@ def test_broad_source_questions_find_unprocessed_passages_without_upgrading_them
     historical = retrieve_event_memory(1, "How is infrastructure capacity financed?", workflow=workflow,
                                        known_at="2026-01-07T00:00:00Z")
     assert historical["sources"] == []
+
+
+SOURCE_REPORT_QUESTION = (
+    "What do the retained sources report about Qwen model releases? "
+    "Distinguish accepted event-memory facts from unstructured source reports. "
+    "Do not search the web. Answer in three short English sentences with citations."
+)
+
+
+@pytest.fixture
+def retained_release_reports(tmp_path):
+    from event_workflow import Workflow
+    workflow = Workflow(tmp_path / "release-reports.sqlite3", clock=lambda: "2026-01-06T12:00:00Z")
+    report = {"title": "Alibaba Qwen4-Max model release report",
+              "content": "A retained news source reports that Alibaba announced Qwen4-Max. The report gives no precise effective timestamp.",
+              "url": "https://example.invalid/qwen4-max-report", "source": "Public model news"}
+    workflow.capture_documents(1, [report])
+    # Generic reporting/instruction words must not push the named model out of
+    # the bounded document candidate window.
+    for number in range(12):
+        workflow.capture_documents(1, [{"title": f"Unrelated news report {number}",
+            "content": "Retained sources report English facts about unrelated infrastructure projects.",
+            "url": f"https://example.invalid/unrelated-{number}", "source": "Other reports"}])
+    return workflow, report
+
+
+def test_release_source_reporting_retrieves_qwen4_max_without_accepted_facts(retained_release_reports):
+    workflow, report = retained_release_reports
+    assert workflow.search_documents(1, "Qwen")[0]["original_url"] == report["url"]
+    assert relevance_score(report["content"], "Qwen") > 0
+    assert relevance_score("Alibaba Qwen5-Max announcement", "Qwen4-Max") == 0
+    result = retrieve_event_memory(1, SOURCE_REPORT_QUESTION, workflow=workflow)
+    assert result["exclusive"] and result["events"] == []
+    assert len(result["sources"]) == 1
+    source = result["sources"][0]
+    assert source["support_status"] == "unstructured_source" and source["assertion_ids"] == []
+    assert source["url"] == report["url"] and "Qwen4-Max" in source["quote"]
+    document = workflow.search_documents(1, "Qwen")[0]
+    assert document["body"][source["quote_start"]:source["quote_end"]] == source["quote"]
+    assert "UNSTRUCTURED SOURCE MATERIAL" in result["text"]
+    assert "Accepted field values are unknown" in result["text"]
+    assert "Missing accepted facts does not mean retained reports are missing" in result["text"]
+    assert not retrieve_event_memory(2, SOURCE_REPORT_QUESTION, workflow=workflow)["sources"]
+
+
+@pytest.mark.parametrize("question", [
+    "What is the current availability of Qwen model releases? Cite the retained sources.",
+    "Is Qwen4-Max available? Cite the retained sources.",
+    "What is the Qwen4-Max release date according to the sources?",
+])
+def test_strict_release_fields_do_not_borrow_unaccepted_reports(retained_release_reports, question):
+    workflow, _ = retained_release_reports
+    result = retrieve_event_memory(1, question, workflow=workflow)
+    assert result["exclusive"] and result["events"] == [] and result["sources"] == []
+    assert "Accepted field values are unknown" in result["text"]
+    assert "UNSTRUCTURED SOURCE MATERIAL" not in result["text"]
+
+
+@pytest.mark.parametrize("scope", [
+    {"known_at": "2026-01-07T00:00:00Z"},
+    {"valid_at": "2026-01-07T00:00:00Z"},
+    {"event_id": "absent-release"},
+])
+def test_historical_and_selected_event_reporting_stay_projection_only(retained_release_reports, scope):
+    workflow, _ = retained_release_reports
+    result = retrieve_event_memory(1, SOURCE_REPORT_QUESTION, workflow=workflow, **scope)
+    assert result["exclusive"] and result["events"] == [] and result["sources"] == []
+    assert "UNSTRUCTURED SOURCE MATERIAL" not in result["text"]
+
+
+def test_release_report_chat_keeps_web_and_legacy_disabled(retained_release_reports, monkeypatch):
+    workflow, _ = retained_release_reports
+    monkeypatch.setattr(chatbot, "retrieve_event_memory", lambda topic_id, message, **scope:
+                        retrieve_event_memory(topic_id, message, workflow=workflow, **scope))
+    monkeypatch.setattr(chatbot, "_get_topic_name", lambda _: "AI monitoring")
+    def forbidden(*args, **kwargs):
+        pytest.fail("Release source reporting cannot fill accepted facts from legacy or web")
+    for name in ("retrieve_current_state", "retrieve_timeline_context", "retrieve_archive_context", "web_search", "_run_vector_supplement"):
+        monkeypatch.setattr(chatbot, name, forbidden)
+    seen = []
+    def answer(messages, **kwargs):
+        seen.extend(messages)
+        yield "There are no accepted release fields. A retained source reports a Qwen4-Max announcement. [S1]"
+    monkeypatch.setattr(chatbot, "llm_chat_stream", answer)
+    chunks = list(chatbot.chat_stream_with_status(SOURCE_REPORT_QUESTION, topic_id=1))
+    assert "Qwen4-Max" in seen[-1]["content"] and "UNSTRUCTURED SOURCE MATERIAL" in seen[-1]["content"]
+    sources = next(chunk["sources"] for chunk in chunks if isinstance(chunk, dict) and "sources" in chunk)
+    assert len(sources) == 1 and sources[0]["support_status"] == "unstructured_source"

@@ -32,7 +32,7 @@ Transitions advance a target's effective interval. Corrections preserve its inte
 - **Briefing** preserves current and long-term analysis. New briefings read authoritative release projections, retain their input versions and label other coverage as legacy analysis. Older / changed-input briefings display a refresh notice.
 - Asking about an event preserves its facts and evidence in the workspace and sends the explicit event and temporal scope to chat.
 - Retrieval uses question relevance and exact versions instead of a total-record threshold. Scoped release facts come from eventkb. Historical questions exclude current summaries, prior assistant assertions and live web results.
-- Bound `[S1]` citations open the retained original passage, revision and source link. Unbound labels do not become apparent evidence controls. Raw document recall is labelled unstructured source material; it cannot substitute for an accepted historical fact.
+- Bound `[S1]` citations open the retained original passage, revision and source link. Unbound labels do not become apparent evidence controls. Explicit questions about what retained sources report can recall unstructured release passages while accepted fields remain unknown. Strict state, historical and selected-event questions use the fact projection. Raw reports cannot substitute for an accepted fact.
 
 Interface and generated prose remain English. Original quotations and user input keep their original language.
 

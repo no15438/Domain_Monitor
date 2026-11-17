@@ -25,7 +25,17 @@ _RELEASE_QUERY = re.compile(
     r"|模型.*(?:可用|发布|上线|状态|版本)|(?:可用|发布|上线).*模型", re.I)
 _RELEASE_ACTION = re.compile(
     r"\b(?:status|availability|available|announc\w*|releas\w*|launch\w*)\b|可用|发布|上线|状态", re.I)
+_MODEL_NAME = re.compile(r"\b(?:qwen|gpt|claude|gemini|deepseek|llama|mistral)(?=\b|\d)", re.I)
 _VERSION = re.compile(r"(?<![\d.])v?\d+(?:\.\d+)+(?:[a-z][a-z0-9]*)?(?![A-Za-z0-9_.])", re.I)
+_SOURCE_REPORT_QUERY = re.compile(
+    r"\b(?:sources?|documents?|articles?|reports?|passages?)\b.{0,120}\b(?:report|say|describe|mention|cover|discuss|contain)\b"
+    r"|\b(?:summari[sz]e|show|find|retrieve|quote|compare)\b.{0,100}\b(?:sources?|documents?|articles?|reports?|passages?)\b.{0,60}\b(?:about|on|regarding|covering)\b"
+    r"|\b(?:reported|described|mentioned)\b.{0,100}\b(?:sources?|documents?|articles?|reports?)\b"
+    r"|(?:原文|来源|文档|报道).{0,60}(?:提到|说|记载|报告|内容)", re.I)
+_SOURCE_QUERY_STOP = frozenset("""retained stored captured collected original unstructured
+document documents article articles report reports reported reporting passage passages
+say says said describe describes mention mentions contain contains cover covers discuss
+discusses releases""".split())
 _MANAGED_TEXT = re.compile(
     r"\b(?:model|llm|qwen|gpt|claude|gemini|deepseek|llama|mistral)\b"
     r".*\b(?:releas\w*|launch\w*|availab\w*|announc\w*)\b"
@@ -40,10 +50,12 @@ def _tokens(text: str) -> list[str]:
     words = [token.casefold() for token in _TOKENS.findall(prepared)]
     result = list(words)
     for word in words:
-        result.extend(part for part in re.split(r"[-/]", word) if part)
-        joined = re.fullmatch(r"([^\W\d_]+)(\d+(?:\.\d+)+)", word)
-        if joined:
-            result.extend(joined.groups())
+        parts = [part for part in re.split(r"[-/]", word) if part]
+        result.extend(parts)
+        for part in parts:
+            joined = re.fullmatch(r"([^\W\d_]+)(\d+(?:\.\d+)*)", part)
+            if joined:
+                result.extend(joined.groups())
     return list(dict.fromkeys(result))
 
 
@@ -61,12 +73,28 @@ def relevance_score(text: str, message: str) -> float:
     text_versions = {value.casefold().lstrip("v") for value in _VERSION.findall(text)}
     if versions and not versions <= text_versions:
         return 0.0
+    for token in _TOKENS.findall(message):
+        for part in re.split(r"[-/]", token):
+            joined = re.fullmatch(r"([A-Za-z]+)(\d+(?:\.\d+)*)", part)
+            if joined and not re.search(r"(?<!\w)" + re.escape(joined[1]) + r"\s*[-_]?\s*"
+                                        + re.escape(joined[2]) + r"(?![\w.])", text, re.I):
+                return 0.0
     names = [term for term in terms if not _VERSION.fullmatch(term) and not term.isdigit()]
     # A coincidentally equal version number is not an entity match.
     if names and not any(term in tokens for term in names):
         return 0.0
     hits = sum(term in tokens for term in terms)
     return hits / len(terms) if hits else 0.0
+
+
+def _reported_source_query(message: str) -> str | None:
+    """Separate requests about reports from requests for an accepted field value."""
+    question = re.split(r"\?|[.!]\s+(?=[A-Z])|[;\n]", message, maxsplit=1)[0]
+    if not _SOURCE_REPORT_QUERY.search(question):
+        return None
+    focus = re.search(r"\b(?:about|on|regarding|covering)\s+(.+)", question, re.I)
+    content = focus[1] if focus else question
+    return " ".join(term for term in query_terms(content) if term not in _SOURCE_QUERY_STOP)
 
 
 def record_text(record: dict) -> str:
@@ -184,12 +212,14 @@ def retrieve_event_memory(topic_id: int, message: str, *, event_id=None, valid_a
         workflow = get_workflow()
     valid_at, known_at = _scope_times(message, valid_at, known_at)
     temporal = bool(valid_at or known_at)
+    reported_source_query = _reported_source_query(message) if not temporal and not event_id else None
     scope = {"topic_id": topic_id, "event_id": event_id, "valid_at": valid_at, "known_at": known_at}
     # Generic announcements also describe acquisitions, regulation and other
     # coverage. Require a model context or an explicit version/action pair;
     # matching a retained model family below supplies the remaining named case.
     exclusive = bool(event_id or temporal or _RELEASE_QUERY.search(message)
-                     or (_VERSION.search(message) and _RELEASE_ACTION.search(message)))
+                     or ((_VERSION.search(message) or _MODEL_NAME.search(message))
+                         and _RELEASE_ACTION.search(message)))
     # Date-only questions must not silently receive today's state. The UI can
     # supply the precise effective/known-by timezone-aware timestamps.
     unresolved_date = (not temporal and bool(re.search(r"\d{4}-\d{2}-\d{2}", message))
@@ -296,16 +326,21 @@ def retrieve_event_memory(topic_id: int, message: str, *, event_id=None, valid_a
             break
         blocks.append(rendered)
         event_rows.append(state)
-    if not exclusive and query_terms(message) and hasattr(workflow, "search_documents"):
+    document_query = reported_source_query if reported_source_query is not None else message
+    if ((not exclusive or reported_source_query is not None) and not temporal and not event_id
+            and (query_terms(document_query) or reported_source_query is not None)
+            and hasattr(workflow, "search_documents")):
         # Source passages answer broad document questions even if enrichment was
         # deferred. Their capture time is not the knowledge time of an accepted
-        # assertion, so this route is excluded from temporal/field-only answers.
+        # assertion. Explicit questions about what reports say may use these
+        # passages even while release authority remains exclusive; temporal,
+        # selected-event and strict field-only questions cannot use this route.
         seen_revisions = {source["revision"] for source in sources}
-        for document in workflow.search_documents(topic_id, message, known_at=known_at, limit=8):
-            if document.get("revision") in seen_revisions or relevance_score(document.get("body", ""), message) <= 0:
+        for document in workflow.search_documents(topic_id, document_query, known_at=known_at, limit=8):
+            if document.get("revision") in seen_revisions or relevance_score(document.get("body", ""), document_query) <= 0:
                 continue
             body = document.get("body", "")
-            positions = [body.casefold().find(term) for term in query_terms(message)]
+            positions = [body.casefold().find(term) for term in query_terms(document_query)]
             first = min((position for position in positions if position >= 0), default=0)
             start, end = max(0, first - 150), min(len(body), first + 400)
             quote = body[start:end]
@@ -322,6 +357,7 @@ def retrieve_event_memory(topic_id: int, message: str, *, event_id=None, valid_a
                             "revision": document.get("revision", document["id"]), "publisher": document.get("publisher", ""),
                             "published_at": document.get("published_at", ""), "recorded_at": document.get("captured_at", ""),
                             "quote": quote, "quote_start": start, "quote_end": end, "assertion_ids": [],
+                            "content_status": document.get("content_status", "unknown"),
                             "support_status": "unstructured_source"})
             seen_revisions.add(document.get("revision"))
             if len([source for source in sources if source.get("support_status") == "unstructured_source"]) >= 3:
@@ -333,7 +369,9 @@ def retrieve_event_memory(topic_id: int, message: str, *, event_id=None, valid_a
     if change_cutoff:
         header.append(f"Change window: records newly observed or updated since {change_cutoff}. This is a knowledge-update window; effective field dates are shown separately.")
     if not selected and exclusive:
-        header.append("No accepted ModelRelease fields matching the requested event/entity/time are available. Say that the requested fact is unknown; do not infer it from an unrelated release or a generated legacy summary.")
+        header.append("No accepted ModelRelease fields matching the requested event/entity/time are available. Accepted field values are unknown; do not infer them from an unrelated release or a generated legacy summary.")
+    if any(source.get("support_status") == "unstructured_source" for source in sources):
+        header.append("Retained source reports are provided below separately from accepted fields. Summarize only what each source reports, with explicit attribution and citations; do not turn reported availability or dates into accepted current facts. Missing accepted facts does not mean retained reports are missing.")
     text = ("\n".join(header) + "\n\n" + "\n\n".join(blocks)) if blocks or exclusive else ""
     if sources:
         text += "\nCite the exact [S#] IDs next to each supported fact. A stored field is not independently verified truth."
