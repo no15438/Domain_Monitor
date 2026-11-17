@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import ToastContainer from "@/components/ToastContainer";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import RuntimeStatus from "@/components/RuntimeStatus";
 
 export const metadata: Metadata = {
   title: "Domain Monitor — AI Industry Intelligence",
@@ -19,6 +20,7 @@ export default function RootLayout({
     >
       <body className="h-full">
         <ThemeProvider attribute="data-theme" defaultTheme="system" enableSystem>
+          <RuntimeStatus />
           {children}
           <ToastContainer />
         </ThemeProvider>

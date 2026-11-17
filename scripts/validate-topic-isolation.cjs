@@ -14,7 +14,8 @@ function compile(file, resolver) {
   return exports;
 }
 let state;
-const unexpectedAPI = new Proxy({}, { get: (_, key) => () => { throw Error('Unexpected API: ' + String(key)); } });
+const apiOverrides = {};
+const unexpectedAPI = new Proxy({}, { get: (_, key) => apiOverrides[key] || (() => { throw Error('Unexpected API: ' + String(key)); }) });
 const {useStore} = compile('frontend/src/stores/useStore.ts', name => {
   if (name === 'zustand') return {create: () => initializer => {
     const get = () => state;
@@ -76,5 +77,25 @@ const {default:EventFeed} = compile('frontend/src/components/EventFeed.tsx', nam
   assert.equal(calls.filter(c=>c==='fetch').length,2,'Topic still loads active feed and archive count');
   assert.equal(calls.filter(c=>c==='sse').length,1,'Topic still opens SSE');
   activeCleanup.forEach(f=>f());
-  console.log(JSON.stringify({ok:true,checks:['topic switch clears stale context','null topic makes zero fetch/SSE calls','null topic clears UI state','selected topic still fetches and streams'],limit:'Isolated hook/store behavior; not a browser E2E test'}));
+  // Exercise real chat store actions with completed, failed and delayed API responses.
+  let callsStarted=0, resolveStart;
+  apiOverrides.createChatTask=async()=>{callsStarted++;};
+  useStore.setState({activeTopicId:2,isChatLoading:false,
+    hydrateChatConversation:async()=>useStore.setState({chatTaskByTopic:{'2':{running:false}}}),
+    ensureChatTaskPoll:()=>{}});
+  await state.startChatTask('fast');
+  assert.equal(state.isChatLoading,false,'Completed response must not leave a spinner');
+  apiOverrides.createChatTask=async()=>{throw Error('Service unavailable');};
+  await assert.rejects(()=>state.startChatTask('failed'),/Service unavailable/);
+  assert.equal(state.isChatLoading,false,'Failed request unlocks chat');
+  apiOverrides.createChatTask=()=>{callsStarted++;return new Promise(resolve=>{resolveStart=resolve;});};
+  const pending=state.startChatTask('delayed');
+  const before=callsStarted;
+  await state.startChatTask('duplicate');
+  assert.equal(callsStarted,before,'Pending start rejects duplicate submits');
+  useStore.setState({activeTopicId:3,isChatLoading:false,selectedArticle:{id:'new-topic-context'}});
+  resolveStart();await pending;
+  assert.equal(state.selectedArticle.id,'new-topic-context','Late start cannot clear another topic context');
+  assert.equal(state.isChatLoading,false,'Late start cannot change another topic loading state');
+  console.log(JSON.stringify({ok:true,checks:['topic switch clears stale context','null topic makes zero fetch/SSE calls','null topic clears UI state','selected topic still fetches and streams','fast chat completion clears loading','failed start unlocks chat','pending start blocks duplicate submits','late start preserves new topic state'],limit:'Isolated hook/store behavior; not a browser E2E test'}));
 })().catch(e=>{console.error(e);process.exitCode=1});

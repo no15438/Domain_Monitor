@@ -2,6 +2,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import re
 import threading
 import urllib.parse
 from contextlib import asynccontextmanager
@@ -9,7 +10,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from config import settings
@@ -459,9 +460,14 @@ async def lifespan(_app: FastAPI):
     task_cleanup_stale(timeout_minutes=30)
     chat_recover_interrupted_tasks()
     chat_cleanup_stale(timeout_minutes=30)
-    start_scheduler()
-    yield
-    stop_scheduler()
+    scheduled = settings.scheduler_enabled and settings.external_calls_enabled
+    if scheduled:
+        start_scheduler()
+    try:
+        yield
+    finally:
+        if scheduled:
+            stop_scheduler()
 
 
 app = FastAPI(title="Domain Monitor API", lifespan=lifespan)
@@ -470,7 +476,35 @@ if settings.event_memory_enabled:
     from eventkb.api import ROOT, install
     from eventkb import Store
 
-    install(app, store=Store(ROOT / settings.event_memory_database_path))
+    install(app, store=Store(ROOT / settings.event_memory_database_path),
+            allowed_origins=set(settings.cors_origins.split(",")) | {"http://127.0.0.1:3870", "http://localhost:3870"},
+            allowed_hosts=settings.event_memory_hosts.split(","))
+
+
+@app.middleware("http")
+async def external_service_boundary(request: Request, call_next):
+    path = request.url.path
+    generation = bool(re.fullmatch(r"/api/topics/\d+/(?:generate-research-plan|(?:ai-summary|global-overview|synthesis/global-overview|synthesis/evolution-report)/generate)", path))
+    model_action = generation or path in ("/api/chat", "/api/chat/tasks", "/api/admin/regen-event-titles")
+    if request.method == "POST" and (model_action or path == "/api/fetch-now"):
+        if not settings.external_calls_enabled:
+            return JSONResponse({"detail": "本地模式尚未启用新闻采集和 AI 服务。话题、资料与事件记忆仍可使用。"}, status_code=503)
+        if model_action:
+            from llm_client import configuration_issue
+            issue = configuration_issue()
+            if issue:
+                return JSONResponse({"detail": issue}, status_code=503)
+    return await call_next(request)
+
+
+@app.get("/api/runtime")
+def runtime_status():
+    from llm_client import configuration_issue
+    issue = configuration_issue()
+    return {"external_calls_enabled": settings.external_calls_enabled,
+            "scheduler_enabled": settings.scheduler_enabled and settings.external_calls_enabled,
+            "model_configured": issue is None,
+            "event_memory_enabled": settings.event_memory_enabled}
 
 app.add_middleware(
     CORSMiddleware,

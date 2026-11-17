@@ -7,10 +7,27 @@ _client = None
 _THINK_RE = re.compile(r"<think>[\s\S]*?</think>\s*", re.DOTALL)
 
 
+def configuration_issue():
+    provider = settings.llm_provider
+    required = {
+        "openai": (settings.openai_api_key, settings.openai_model),
+        "anthropic": (settings.anthropic_api_key, settings.anthropic_model),
+        "dashscope": (settings.dashscope_api_key, settings.dashscope_model, settings.dashscope_base_url),
+        "openai_compat": (settings.openai_compat_base_url, settings.openai_compat_model),
+        "lmstudio": (settings.lmstudio_base_url, settings.lmstudio_model),
+    }
+    if provider not in required or not all(str(value or "").strip() for value in required[provider]):
+        return "AI 服务尚未配置完整，请先设置模型服务后再生成或对话。"
+    return None
+
+
 def _get_client():
     global _client
     if _client is not None:
         return _client
+    issue = configuration_issue()
+    if issue:
+        raise ValueError(issue)
 
     provider = settings.llm_provider
 

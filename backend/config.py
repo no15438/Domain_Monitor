@@ -1,10 +1,13 @@
 from pathlib import Path
+import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 from typing import Optional
 
 # 始终从 backend/ 目录加载 .env，避免从仓库根目录启动 uvicorn 时读不到 backend/.env
 _BACKEND_DIR = Path(__file__).resolve().parent
+_ROOT = _BACKEND_DIR.parent
 
 
 class Settings(BaseSettings):
@@ -56,9 +59,18 @@ class Settings(BaseSettings):
     # Local opt-in adapter. Requires the repository root on PYTHONPATH.
     event_memory_enabled: bool = False
     event_memory_database_path: str = "data/eventkb.sqlite3"
+    event_memory_hosts: str = "localhost,127.0.0.1,backend,testserver"
+    scheduler_enabled: bool = False
+    external_calls_enabled: bool = True
+
+    @field_validator("database_path", "chroma_persist_dir", "event_memory_database_path")
+    @classmethod
+    def resolve_storage(cls, value):
+        path = Path(value).expanduser()
+        return str(path if path.is_absolute() else _ROOT / path)
 
     model_config = SettingsConfigDict(
-        env_file=str(_BACKEND_DIR / ".env"),
+        env_file=os.environ.get("DOMAIN_MONITOR_ENV_FILE", str(_BACKEND_DIR / ".env")),
         env_file_encoding="utf-8",
         extra="ignore",
     )

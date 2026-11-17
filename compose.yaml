@@ -1,12 +1,16 @@
 services:
   backend:
     build:
-      context: ./backend
+      context: .
+      dockerfile: backend/Dockerfile
     env_file:
-      - ./backend/.env
+      - path: ./backend/.env
+        required: false
     environment:
       DATABASE_PATH: /app/data/monitor.db
       CHROMA_PERSIST_DIR: /app/data/chroma
+      EVENT_MEMORY_DATABASE_PATH: /app/data/eventkb.sqlite3
+      EVENT_MEMORY_ENABLED: "true"
     volumes:
       - backend_data:/app/data
     restart: unless-stopped

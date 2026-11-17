@@ -29,6 +29,7 @@ from database import (
     get_claims_v2,
     get_claim_evolution,
     get_snapshot_deltas,
+    resolve_vector_candidate,
 )
 
 # ── Limits & thresholds ────────────────────────────────────────────────────────
@@ -406,7 +407,7 @@ def _run_vector_supplement(
     topic_id: int | None,
     intent: dict,
 ) -> dict[str, list[dict]]:
-    """Run scoped Chroma search based on intent; filter out inactive items unless archive mode."""
+    """Treat vector matches as candidates and rebuild all content from SQLite."""
     where_filter = {"topic_id": str(topic_id)} if topic_id is not None else None
 
     if intent.get("needs_archive"):
@@ -425,18 +426,14 @@ def _run_vector_supplement(
     }
     for hit in hits:
         col = hit.get("collection", "")
-        meta = hit.get("metadata", {})
-        # Suppress inactive/archived from supplemental unless archive mode is active
-        if not intent.get("needs_archive") and meta.get("status") in ("inactive", "archived"):
+        kind = next((kind for suffix,kind in (("kb_hot_events","events"), ("kb_claims","claims"),
+                    ("kb_temporal_snapshots","snapshots"), ("kb_synthesis_artifacts","artifacts")) if col.endswith(suffix)), None)
+        if kind is None:
             continue
-        if col.endswith("kb_hot_events"):
-            grouped["events"].append(hit)
-        elif col.endswith("kb_claims"):
-            grouped["claims"].append(hit)
-        elif col.endswith("kb_temporal_snapshots"):
-            grouped["snapshots"].append(hit)
-        elif col.endswith("kb_synthesis_artifacts"):
-            grouped["artifacts"].append(hit)
+        historical = bool(intent.get("needs_archive") or (intent.get("needs_timeline") and kind == "snapshots"))
+        resolved = resolve_vector_candidate(kind, hit.get("id", ""), topic_id, historical=historical)
+        if resolved:
+            grouped[kind].append({**hit, **resolved})
     return grouped
 
 

@@ -16,7 +16,7 @@ LOCAL_ORIGINS = {f"http://{host}:{port}" for host in ("localhost", "127.0.0.1")
 
 def boundary(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
-    if request.url.hostname not in ("localhost", "127.0.0.1", "testserver"):
+    if request.url.hostname not in request.app.state.event_memory_hosts:
         raise HTTPException(403, "Event memory is available on localhost only")
     if request.method != "GET":
         origin = request.headers.get("origin")
@@ -146,9 +146,10 @@ def memory(event_id: str, body: MemoryInput, store: DB):
     return invoke(store.set_memory, event_id, **body.model_dump(exclude={"topic"}))
 
 
-def install(app: FastAPI, *, store: Store, allowed_origins=None):
+def install(app: FastAPI, *, store: Store, allowed_origins=None, allowed_hosts=None):
     app.state.event_memory_store = store
     app.state.event_memory_origins = set(LOCAL_ORIGINS if allowed_origins is None else allowed_origins)
+    app.state.event_memory_hosts = set(allowed_hosts or ("localhost", "127.0.0.1", "testserver"))
     app.include_router(router)
 
 

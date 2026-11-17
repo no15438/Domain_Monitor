@@ -166,7 +166,9 @@ class APIBehavior(unittest.TestCase):
         block = next(node for node in tree.body if isinstance(node, ast.If) and isinstance(node.test, ast.Attribute) and node.test.attr == "event_memory_enabled")
         for enabled in (False, True):
             app = FastAPI()
-            namespace = {"app": app, "settings": SimpleNamespace(event_memory_enabled=enabled, event_memory_database_path=str(self.store.path))}
+            namespace = {"app": app, "settings": SimpleNamespace(event_memory_enabled=enabled,
+                event_memory_database_path=str(self.store.path), cors_origins="http://localhost:3000",
+                event_memory_hosts="localhost,127.0.0.1,testserver")}
             exec(compile(ast.Module(body=[block], type_ignores=[]), "backend/main.py", "exec"), namespace)
             response = TestClient(app).get("/api/event-memory/health")
             self.assertEqual(response.status_code, 200 if enabled else 404)

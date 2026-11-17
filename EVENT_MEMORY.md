@@ -4,7 +4,30 @@
 
 这是可运行的离线纵向切片：事件身份 → 证据版本 → 字段断言 → 双时间查询 → 历史回溯 → 可恢复记忆策略 → Markdown 索引。核心与原始离线界面使用 Python 3.10+ 标准库和 SQLite，零依赖、无模型调用。默认使用独立 `data/eventkb.sqlite3`，不加载 `.env`，不读取旧数据库，不启动采集器或调度器。第二阶段的 FastAPI 适配器需要可选依赖，见下文。
 
-旧 FastAPI / Next.js 系统仍保留在 `backend/` 和 `frontend/`。第二阶段已加入 Next.js `/event-memory` 页面、主页入口和可选的旧 FastAPI 路由挂载。新查询入口只返回数据库投影；旧 `/api/chat` 尚未迁移，旧聊天检索中的风险仍然存在。尚未做生产迁移、真实新闻抽取和身份自动合并。
+完整 FastAPI / Next.js 系统保留在 `backend/` 和 `frontend/`。现在根目录 `app:app` 与统一启动器同时提供原话题工作区和 `/event-memory`。新查询入口只返回数据库投影；旧 `/api/chat` 尚未迁移到新事件库，本次已修复其向量候选复核、稳定事实老化与快照内容漂移问题。尚未做生产迁移、真实新闻抽取和身份自动合并。
+
+## 完整系统启动（推荐）
+
+在本 worktree 根目录执行：
+
+```bash
+python3 scripts/run-local.py --install
+```
+
+打开 `http://127.0.0.1:3870/`，事件记忆位于 `/event-memory`。启动器先等待完整后端就绪，再启动前端，默认关闭外部调用和定时任务，页面会明确显示本地模式。端口占用时直接报告，不终止其他程序；按 Ctrl+C 或收到 SIGTERM 时收回自身启动的服务。再次启动可省略 `--install`。依赖保存在 `~/.cache/domain-monitor`，避免项目目录中的依赖被 iCloud 卸载；前端仍按锁文件安装。
+
+数据默认保存在根目录 `data/monitor.db`、`data/eventkb.sqlite3` 与 `data/chroma/`；`--data-dir` 可指定另一目录。首次不会复制、导入原仓库数据或凭据。需要外部服务时显式传入 `--env-file /absolute/path/to/backend/.env --enable-external`；定时采集还需 `--schedule`。这两项启用后可能调用配置的外部服务，当前验证没有启用。没有模型配置时生成接口直接返回明确错误，不创建等待任务。
+
+```bash
+python3 scripts/run-local.py --check
+~/.cache/domain-monitor/venv/bin/python -m pip install pytest httpx
+PYTHONPATH="$PWD/backend:$PWD" ~/.cache/domain-monitor/venv/bin/python -m pytest backend/tests tests -q
+~/.cache/domain-monitor/venv/bin/python scripts/validate-system.py
+node scripts/validate-api-errors.cjs
+node scripts/validate-topic-isolation.cjs "$PWD"
+```
+
+完整应用测试使用真实 ASGI 生命周期、SQLite 和 Chroma；外部响应为合成数据，并阻断出站网络。聊天 SSE、任务持久化和重启恢复均纳入验证。详细结果与实际浏览器验证见 `SYSTEM_VALIDATION.md`。
 
 ## 第二阶段：原前端中的事件记忆
 
@@ -37,7 +60,7 @@ EVENT_MEMORY_API_BASE=http://127.0.0.1:8770 npm run dev -- --webpack --hostname 
 
 其余适配器路由均在 `/api/event-memory` 下：`GET /health`、`GET /topics`、`POST /events`、`POST /evidence`、`GET /events/{id}/state`、`GET /events/{id}/history`、`POST /events/{id}/assertions` 和 `POST /events/{id}/memory`。事件详情、历史和写入均校验话题；请求不能回填获知时间。响应禁止缓存。新 API 继续仅面向本机开发，没有生产身份认证。
 
-若需要在旧 FastAPI 服务中挂载相同路由，在根目录设置 `PYTHONPATH="$PWD:$PWD/backend"`，并设置 `EVENT_MEMORY_ENABLED=true`；`EVENT_MEMORY_DATABASE_PATH` 默认为相对仓库根的 `data/eventkb.sqlite3`，也接受绝对路径。默认关闭，不更改旧接口。旧服务原有启动流程仍会开启调度器，**离线验证使用独立 api 命令**。现有 backend 容器构建上下文不含根目录 eventkb 包，此可选挂载目前仅支持本机；本次未更改或验证部署。
+直接启动完整后端可在根目录运行 `uvicorn app:app`，新路由默认挂载；旧 `backend/main:app` 路径仍可通过 `EVENT_MEMORY_ENABLED=true` 选择挂载。调度器现在仅在 `SCHEDULER_ENABLED=true` 且 `EXTERNAL_CALLS_ENABLED=true` 时启动。三个存储路径都按仓库根目录解析。Compose 与 Render 构建入口已包含 `eventkb`；新 API 主机白名单由 `EVENT_MEMORY_HOSTS` 配置，写入来源使用 `CORS_ORIGINS`。容器配置校验通过，当前 Docker 引擎未运行，因此未构建镜像或部署。
 
 验证命令：
 
@@ -48,7 +71,7 @@ cd frontend
 EVENT_MEMORY_API_BASE=http://127.0.0.1:8770 npm run build -- --webpack
 ```
 
-测试使用真实 FastAPI TestClient 和合成 SQLite。旧 main 的挂载条件使用真实源码块隔离验证，未启动旧依赖、调度器或完整旧服务。原始离线测试依然可只用标准库运行，可选 API 测试在依赖缺失时标为跳过。当前本机前端依赖链接到 `/tmp/domain-monitor-event-memory-node/node_modules` 的独立安装；旧仓库依赖读取曾挂起，不再复用它，临时目录清理后需重新安装。
+测试使用真实 FastAPI TestClient 和合成 SQLite；另有完整应用测试覆盖启动与旧接口。核心离线测试仍可只用标准库运行，可选 API／完整后端测试在依赖缺失时跳过。当前前端依赖由统一启动器链接到 `~/.cache/domain-monitor/frontend-<锁文件摘要>/node_modules`。
 
 另有 `scripts/validate-event-memory-ui.cjs` 定向 React 检查，模拟不理会取消信号的迟到查询，以及跨话题的迟到保存完成；也验证日期输入、历史只读和不安全来源链接。该脚本运行真实页面组件，只模拟网络和框架外壳；不替代浏览器。需要在传入依赖目录中额外安装与 React 匹配的 `react-test-renderer@19.2.4`（可选测试工具，未加入产品依赖；上游会打印弃用提示）。运行 `node scripts/validate-event-memory-ui.cjs /tmp/domain-monitor-event-memory-node/node_modules`。浏览器实际操作和五项定向检查均已通过。
 
@@ -133,13 +156,13 @@ Markdown 是可丢弃、可再生的工作索引，修改它不会修改 SQLite�
 
 ## 旧版审计与下一阶段
 
-`tests/test_legacy_risks.py` 用 AST 隔离真实函数与最小合成 SQL，复现三个问题，不导入模型或向量客户端：
+`tests/test_legacy_risks.py` 现为修复回归测试，使用真实 SQLite 结构和迁移，并隔离模型／向量客户端：
 
-- `backend/chatbot.py::_run_vector_supplement` 非 archive 模式只排除 inactive/archived，会让 superseded/stale 条目进入补检。提示中的状态标签不能提供硬隔离；向量元数据也不是权威状态。
-- `backend/claim_lifecycle.py::evaluate_claim_lifecycle` 对稳定 fact 与短期趋势使用相同老化逻辑，仅因支持报道变旧就设置 inactive；未在当前 500 条内找到替代项也可能错误改变先前状态。
-- `backend/database.py::get_snapshot_claims` 通过 snapshot_claims JOIN 当前 claims 行；`upsert_claim` 可原位修改该行，历史快照因而漂移。events_v2 的 upsert 也会原位更新摘要和属性，不能独立还原完整过去。
+- 向量只返回候选 ID；实际正文、话题和状态重新从 SQLite 读取。当前补检仅接受 active 事件和 active/fresh 断言，排除被替代、缺失和跨话题条目。历史意图仍可读取历史记录。
+- fact／structural 不再只因年龄失效；短期 observation 仍按原窗口老化。superseded／archived／inactive 不因有限扫描缺失替代项而自动复活，恢复需要明确更新。
+- 新快照在关联插入时捕获事件和断言内容，后续更新、删除源行及重启不改变捕获内容。旧快照缺失的捕获不回填当前内容，明确标为 unavailable；无法凭空恢复过去。
 
-下一阶段应在旧采集器之后加入“候选事件身份匹配 → 有效时间抽取 → 关系审阅”边界，迁移工具只读旧库、写新库并生成审计报告。未来迁移旧聊天时，回答应只使用新投影；向量索引仅返回候选 ID，再向 SQLite 复核有效状态与时间，禁止直接把向量正文送入当前上下文。还需要断言人工审阅 UI、字段级权限、实体别名合并、部分区间更正、撤回和大规模索引；这些均未完成。当前新页面的策略调整不等于断言审阅。
+下一阶段仍需在旧采集器之后加入“候选事件身份匹配 → 有效时间抽取 → 关系审阅”边界，迁移工具只读旧库、写新库并生成审计报告。完整双时间聊天必须接到新投影，当前旧聊天的数据库复核还不等于字段级有效时间推理。还需要断言人工审阅 UI、字段级权限、实体别名合并、部分区间更正、撤回和大规模索引；这些均未完成。当前新页面的策略调整不等于断言审阅。
 
 ## 本地目录与项目登记
 

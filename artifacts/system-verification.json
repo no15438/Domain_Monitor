@@ -1,0 +1,87 @@
+{
+  "status": "ok",
+  "checks": [
+    "unified-health-and-runtime",
+    "scheduler-does-not-start-in-local-mode",
+    "topic-create-and-duplicate",
+    "topic-update",
+    "topic-keywords-and-feeds",
+    "article-edit-and-keep",
+    "article-archive-and-restore",
+    "topic-archive",
+    "workspace-claims",
+    "workspace-evidence",
+    "workspace-snapshot-deltas",
+    "workspace-claim-lifecycle-audit",
+    "workspace-snapshots",
+    "workspace-events/active",
+    "workspace-events/history",
+    "workspace-ai-summary",
+    "workspace-synthesis/global-overview",
+    "workspace-synthesis/evolution-report",
+    "local-mode-blocks-/api/chat",
+    "local-mode-blocks-/api/chat/tasks",
+    "local-mode-blocks-/api/fetch-now",
+    "local-mode-blocks-/api/admin/regen-event-titles",
+    "local-mode-blocks-/api/topics/1/generate-research-plan",
+    "local-mode-blocks-/api/topics/1/ai-summary/generate",
+    "local-mode-blocks-/api/topics/1/global-overview/generate",
+    "local-mode-blocks-/api/topics/1/synthesis/global-overview/generate",
+    "local-mode-blocks-/api/topics/1/synthesis/evolution-report/generate",
+    "blocked-actions-create-no-tasks",
+    "unconfigured-model-fails-before-task-creation",
+    "chat-sse-framing",
+    "chat-task-completes-and-persists",
+    "chat-conversation-cannot-cross-topic",
+    "integrated-event-memory-create",
+    "integrated-event-memory-query",
+    "event-memory-reverse-proxy-host",
+    "chroma-real-write-and-query",
+    "chroma-reopen-persistence",
+    "chroma-delete",
+    "unified-restart-retains-topics-and-events"
+  ],
+  "count": 39,
+  "external_network_calls": 0,
+  "python_tests": {
+    "passed": 213,
+    "existing_warnings": 3
+  },
+  "frontend_behavior_checks": 18,
+  "production_build": "passed (webpack and TypeScript)",
+  "launcher": {
+    "readiness": "passed",
+    "SIGTERM_cleanup": "passed",
+    "orphan_services": 0
+  },
+  "browser_checks": [
+    "homepage creates topic",
+    "topic workspace loads",
+    "local-mode chat explains error and preserves input",
+    "current event state",
+    "historical state read-only",
+    "evidence history",
+    "archive hides event",
+    "archive recall",
+    "restore to summary",
+    "return to homepage without topic error"
+  ],
+  "docker": {
+    "configuration": "passed",
+    "image_build": "not run; engine unavailable",
+    "deployment": "not run"
+  },
+  "boundaries": [
+    "external model/search/collector responses synthetic",
+    "real Chroma uses deterministic offline test embeddings",
+    "legacy chat and ingestion not migrated to bitemporal store"
+  ],
+  "original_files_sha256": {
+    "/Users/no15438/Desktop/Domain_Monitor/README.md": "475df786759f235394befc540d2f841db37c9726d0b9ce0d837504b298bfdafc",
+    "/Users/no15438/Desktop/Domain_Monitor/data/chroma/chroma.sqlite3": "c392dc1d7fe2d1875c29cd644e1daf4e8470041b2329705341f32b6ce7b83b39"
+  },
+  "frontend_retry_guards": [
+    "no mutation retry",
+    "read retry exhausted throws specific server error; never masquerades as an empty list"
+  ]
+}

@@ -1,6 +1,6 @@
 # Domain Monitor — AI-Powered Industry Intelligence
 
-> Event memory refactor: see [EVENT_MEMORY.md](EVENT_MEMORY.md) for the evidence-backed event model, current/history isolation, Next.js event-memory page, optional FastAPI adapter and offline startup commands. The legacy chat and ingestion pipeline have not yet migrated to the event store. See [BRANCH_MANAGEMENT.md](BRANCH_MANAGEMENT.md) for the branch audit and subsequent cleanup.
+> Start the complete local system with `python3 scripts/run-local.py --install`, then open http://127.0.0.1:3870/. External calls and scheduling are off by default. See [EVENT_MEMORY.md](EVENT_MEMORY.md) for configuration and the event model, and [SYSTEM_VALIDATION.md](SYSTEM_VALIDATION.md) for repairs and test results. Legacy chat and ingestion have not yet migrated to the new event store. See [BRANCH_MANAGEMENT.md](BRANCH_MANAGEMENT.md) for branch history.
 
 Real-time industry monitoring system powered by AI. Automatically fetches, deduplicates, clusters, summarizes, and categorizes industry news from multiple sources. Builds a structured, time-aware knowledge base over time, and exposes it through an AI chatbot that uses a multi-layer RAG pipeline to answer questions with full temporal awareness.
 
@@ -464,29 +464,21 @@ The frontend's citation renderer fuzzy-matches the LLM's `[Source Title]` tokens
 
 ## Quick Start
 
-### 1. Backend
+### 1. Complete local system
 
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-
-cp ../.env.example .env
-# Edit .env with your API keys and LLM provider settings
-
-python -m uvicorn main:app --reload --port 8000
+python3 scripts/run-local.py --install
 ```
 
-### 2. Frontend
+Open [http://127.0.0.1:3870](http://127.0.0.1:3870). The launcher starts both services, checks readiness, and stops its own processes on exit. Existing data stays in `data/`; dependencies are installed in `~/.cache/domain-monitor`.
+
+### 2. External services (optional)
 
 ```bash
-cd frontend
-npm install
-npm run dev
+python3 scripts/run-local.py --env-file /absolute/path/to/backend/.env --enable-external
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+Use an existing configuration file. Add `--schedule` only when recurring jobs should run. External calls can incur the configured provider's charges. With no flags, local topic, document and event-memory features work without those calls. See [EVENT_MEMORY.md](EVENT_MEMORY.md) for standalone offline tools and test commands.
 
 ### 3. Docker Compose
 

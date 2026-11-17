@@ -1014,17 +1014,24 @@ export const useStore = create<AppState>()(
     else stopChatTaskPoll(topicId);
   },
   startChatTask: async (message, articleContext) => {
+    if (get().isChatLoading) return;
     const topicId = get().activeTopicId;
     const topicKey = chatTopicKey(topicId);
     const conversationId = get().chatConversationIdByTopic[topicKey] ?? null;
-    await apiCreateChatTask(message, articleContext, topicId, conversationId);
-    await get().hydrateChatConversation(topicId);
-    get().ensureChatTaskPoll(topicId);
-    set({
-      selectedArticle: null,
-      selectedEventContext: null,
-      isChatLoading: true,
-    });
+    set({ isChatLoading: true });
+    try {
+      await apiCreateChatTask(message, articleContext, topicId, conversationId);
+      await get().hydrateChatConversation(topicId);
+      get().ensureChatTaskPoll(topicId);
+      if (get().activeTopicId === topicId) set({
+        selectedArticle: null,
+        selectedEventContext: null,
+        isChatLoading: !!get().chatTaskByTopic[topicKey]?.running,
+      });
+    } catch (error) {
+      if (get().activeTopicId === topicId) set({ isChatLoading: false });
+      throw error;
+    }
   },
   ensureChatTaskPoll: (topicId) => {
     if (topicId == null) return;

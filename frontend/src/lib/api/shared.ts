@@ -46,15 +46,16 @@ export async function fetchWithRetry(
   maxRetries = 2,
 ): Promise<Response> {
   const delays = [1000, 3000];
+  const canRetry = ["GET", "HEAD"].includes((options?.method || "GET").toUpperCase());
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const res = await fetch(url, options);
-      if (res.ok || (res.status >= 400 && res.status < 500)) return res;
-      lastError = new Error(`HTTP ${res.status}`);
+      if (res.ok || (res.status >= 400 && res.status < 500) || !canRetry) return res;
+      lastError = new Error((await extractErrorMessage(res)) || `HTTP ${res.status}`);
     } catch (e) {
       lastError = e;
-      if (options?.signal?.aborted) throw e;
+      if (options?.signal?.aborted || !canRetry) throw e;
     }
     if (attempt < maxRetries) {
       await new Promise((resolve) =>

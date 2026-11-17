@@ -130,6 +130,12 @@ def evaluate_claim_lifecycle(
             next_status = "superseded"
             next_freshness = "replaced"
             reason = f"replaced by {replacement_claim['id']}"
+        elif next_status in ("superseded", "archived", "inactive"):
+            # A limited recent-claim window cannot prove that an old replacement
+            # disappeared. Reactivation requires an explicit reviewed update.
+            reason = "preserved terminal lifecycle state; no explicit reinstatement"
+        elif (claim.get("claim_kind") or claim.get("claim_type")) in ("fact", "structural"):
+            reason = "stable fact retained; evidence age changes attention, not truth"
         else:
             if latest_signal is None:
                 age_days = inactive_window + 1

@@ -290,6 +290,7 @@ def init_db(db_path: str):
     _migrate_topic_summaries_to_snapshots(conn)
     _migrate_articles_event_fields(conn)
     _migrate_lineage_tables(conn)
+    _migrate_snapshot_captures(conn)
 
     conn.executescript("""
         CREATE INDEX IF NOT EXISTS idx_articles_topic_id ON articles(topic_id);
@@ -319,6 +320,24 @@ def init_db(db_path: str):
 
     conn.commit()
     conn.close()
+
+
+def _migrate_snapshot_captures(conn):
+    """Capture linked rows at INSERT time; never invent past content for old links."""
+    for links, source, key in (("snapshot_claims", "claims", "claim_id"),
+                               ("snapshot_events", "events_v2", "event_id")):
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({links})")}
+        if "record_json" not in columns:
+            conn.execute(f"ALTER TABLE {links} ADD COLUMN record_json TEXT")
+        source_columns = [row[1] for row in conn.execute(f"PRAGMA table_info({source})")]
+        args = ",".join(f"'{name}',s.\"{name}\"" for name in source_columns)
+        conn.execute(f"""CREATE TRIGGER IF NOT EXISTS capture_{links}
+            AFTER INSERT ON {links} WHEN NEW.record_json IS NULL
+            BEGIN UPDATE {links} SET record_json=(SELECT json_object({args}) FROM {source} s WHERE s.id=NEW.{key})
+            WHERE id=NEW.id; END""")
+        conn.execute(f"""CREATE TRIGGER IF NOT EXISTS protect_{links}_capture
+            BEFORE UPDATE OF record_json ON {links} WHEN OLD.record_json IS NOT NULL
+            BEGIN SELECT RAISE(ABORT, 'snapshot content is immutable'); END""")
 
 
 def _migrate_topic_summaries_to_snapshots(conn):
@@ -1220,27 +1239,48 @@ def get_latest_temporal_snapshot(topic_id: int, window_type: str = "daily"):
 def get_snapshot_events(snapshot_id: int):
     conn = _conn()
     rows = conn.execute(
-        """SELECT e.* FROM snapshot_events se
-           JOIN events_v2 e ON e.id = se.event_id
-           WHERE se.snapshot_id = ?
-           ORDER BY e.last_seen_at DESC""",
+        "SELECT event_id,record_json FROM snapshot_events WHERE snapshot_id=? ORDER BY id",
         (snapshot_id,),
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+    return [_json_loads(r["record_json"], {"id":r["event_id"], "title":"", "summary":"",
+            "snapshot_capture":"unavailable", "capture_warning":"Legacy snapshot has no captured content"}) for r in rows]
 
 
 def get_snapshot_claims(snapshot_id: int):
     conn = _conn()
     rows = conn.execute(
-        """SELECT c.* FROM snapshot_claims sc
-           JOIN claims c ON c.id = sc.claim_id
-           WHERE sc.snapshot_id = ?
-           ORDER BY c.last_validated_at DESC""",
+        "SELECT claim_id,record_json FROM snapshot_claims WHERE snapshot_id=? ORDER BY id",
         (snapshot_id,),
     ).fetchall()
     conn.close()
-    return [_serialize_claim_row(row) for row in rows]
+    return [_serialize_claim_row(_json_loads(r["record_json"], {"id":r["claim_id"], "statement":"", "summary":"",
+            "snapshot_capture":"unavailable", "capture_warning":"Legacy snapshot has no captured content"})) for r in rows]
+
+
+def resolve_vector_candidate(kind: str, node_id: str, topic_id: int | None, *, historical=False):
+    """A vector hit is only an ID candidate. Rebuild its text from SQLite."""
+    tables = {"claims":"claims", "events":"events_v2", "snapshots":"temporal_snapshots", "artifacts":"synthesis_artifacts"}
+    if kind not in tables:
+        return None
+    if kind == "snapshots":
+        node_id = node_id.rsplit("-", 1)[-1]
+    conn = _conn()
+    row = conn.execute(f"SELECT * FROM {tables[kind]} WHERE id=?", (node_id,)).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    item = dict(row)
+    if topic_id is not None and item.get("topic_id") != topic_id:
+        return None
+    if not historical:
+        if kind not in ("events", "claims") or item.get("status") != "active":
+            return None
+        if kind == "claims" and item.get("staleness_status") != "fresh":
+            return None
+    text = "\n".join(str(item.get(key) or "") for key in
+                     (("statement", "summary") if kind == "claims" else ("title", "summary", "summary_text", "content"))).strip()
+    return {"id":node_id, "document":text, "metadata":{**item, "title":item.get("title") or item.get("statement", "")}}
 
 
 def save_snapshot_delta(

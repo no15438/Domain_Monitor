@@ -3,10 +3,10 @@ services:
     name: domain-monitor-backend-no15438
     runtime: docker
     plan: free
-    rootDir: backend
-    dockerfilePath: Dockerfile
+    rootDir: .
+    dockerfilePath: backend/Dockerfile
     healthCheckPath: /health
-    dockerCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    dockerCommand: uvicorn app:app --host 0.0.0.0 --port 10000
     envVars:
       - key: LLM_PROVIDER
         value: openai_compat
@@ -40,6 +40,10 @@ services:
         value: /tmp/domain-monitor/monitor.db
       - key: CHROMA_PERSIST_DIR
         value: /tmp/domain-monitor/chroma
+      - key: EVENT_MEMORY_DATABASE_PATH
+        value: /tmp/domain-monitor/eventkb.sqlite3
+      - key: EVENT_MEMORY_HOSTS
+        value: localhost,127.0.0.1,domain-monitor-backend-no15438.onrender.com
       - key: CORS_ORIGINS
         value: https://domain-monitor-frontend-no15438.onrender.com,http://localhost:3000
       - key: LOG_LEVEL
