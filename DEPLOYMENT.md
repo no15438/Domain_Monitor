@@ -7,7 +7,7 @@ The user authorized publication on 2026-11-17. The target is the existing Render
 | Component | Configuration |
 | --- | --- |
 | Backend | Existing `Domain_Monitor`, service `srv-d77quoqa214c73dhicm0`, Ohio, free Docker service; repository-root build context; `backend/Dockerfile`; `uvicorn app:app --host 0.0.0.0 --port 10000`. URL: `https://domain-monitor-uf81.onrender.com`. |
-| Frontend | `domain-monitor-frontend-no15438`, Ohio, free Docker service; root `frontend`, `Dockerfile`, `node server.js`, port 10000. `INTERNAL_API_BASE=https://domain-monitor-uf81.onrender.com` must be set during the Docker build as well as runtime, because Next.js builds proxy rewrites into the output. |
+| Frontend | `domain-monitor-frontend-no15438`, service `srv-dbu39kjm8hqs73e0b6f0`, Ohio, free Docker service; root `frontend`, `Dockerfile`, `node server.js`, port 10000. URL: `https://domain-monitor-frontend-no15438-yf92.onrender.com`. `INTERNAL_API_BASE=https://domain-monitor-uf81.onrender.com` must be set during the Docker build as well as runtime, because Next.js builds proxy rewrites into the output. |
 
 No API credentials were present in the old Render service. External calls and scheduling stay disabled for this acceptance deployment. Do not upload local configuration or private databases implicitly. Host/origin restrictions do not provide authentication; do not put private documents into this public acceptance instance.
 
@@ -24,3 +24,5 @@ The free backend uses ephemeral storage under `/tmp/domain-monitor`. This is an 
 - No real model/news calls were made. Provider instruction delivery is tested with mocks; actual provider availability and compliance remain unverified.
 
 Online service status, final commit, and browser acceptance evidence will be appended after the rollout is observed.
+
+Both Docker services reached Live at application commit `9225fd63c29825efb6654f362075a656c09cca1f`. Backend health is `/health`; the frontend proxy returned event-memory health and runtime configuration successfully. Render assigned a suffix to the frontend URL, so its actual origin is reflected in `CORS_ORIGINS` and `render.yaml`. The services were configured directly in the dashboard; they are not linked to a Blueprint. A completed settings rollout actually cleared the first synthetic acceptance topic, confirming the ephemeral-storage limitation rather than restart durability. Final functional acceptance is recorded in `artifacts/deployment-verification.json` and browser screenshots when complete.

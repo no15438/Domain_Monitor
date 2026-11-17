@@ -45,7 +45,7 @@ services:
       - key: EVENT_MEMORY_HOSTS
         value: localhost,127.0.0.1,domain-monitor-uf81.onrender.com
       - key: CORS_ORIGINS
-        value: https://domain-monitor-frontend-no15438.onrender.com,http://localhost:3000
+        value: https://domain-monitor-frontend-no15438-yf92.onrender.com,http://localhost:3000
       - key: EXTERNAL_CALLS_ENABLED
         value: "false"
       - key: SCHEDULER_ENABLED
