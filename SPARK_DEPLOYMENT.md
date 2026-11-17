@@ -55,6 +55,19 @@ Branch `feat/event-memory-workflow` integrates collection, retained source revis
 
 Local verification passed 287 Python tests, 38 frontend behavior checks, 39 isolated system checks and 40 isolated workflow checks. The offline workflow checks use synthetic inputs with real temporary stores and no outbound network access; they do not measure production extraction accuracy. Six Python deprecation warnings remain.
 
+Deployed application code: `db7bd252b5164f5a5cc912e0023adeeca51300e7`. The ARM64 build and all 40 isolated workflow checks also passed in the actual Spark backend image, without production mounts or networking.
+
+Spark acceptance on this release:
+
+- One bounded real collection received 88 items, retained 67 distinct source revisions and added 3 news articles. Two release candidates remain unresolved; no synthetic production event or unsupported effective time was added.
+- Real Alibaba generation completed an English briefing and source-reporting answer. Three retained passages were returned; the used `[S#]` citations matched their stored source offsets. The answer explicitly distinguished unstructured reports from unavailable accepted facts. Trace confirmed event-memory retrieval with legacy/vector/web supplementation excluded.
+- Twelve real-service checks, four additional source-reporting checks and six invalid-scope/origin checks passed. The deployed English interface opened the retained quotation, source revision and original link after container recreation.
+- Both containers were forcibly recreated. Eleven fixed-time API projections, all rows in 38 SQLite tables and all document/metadata records in four Chroma collections were identical before and after. This includes source revisions, candidates, review history, chat, briefings and durable request counters.
+- Final consistent backup `domain-monitor-20261117T175222Z.tar.gz` passed checksum and four SQLite integrity checks after isolated restore. With networking disabled, restored Chroma returned two semantic matches; all 67 retained source hashes and the new chat were intact. The archive was checksum-verified on the Mac mirror as well.
+- The configured Reuters RSS endpoint returned HTTP 401 and was disabled without deleting its stored row. BBC, Google News and The Verge feeds remain configured; Reuters news can still arrive through search. One Google News keyword returned HTTP 429 during collection; other collectors completed and the run preserved their results.
+
+Daily backup and service startup remain enabled. Rollback source directories and images are retained separately from the live configuration and data. Detailed generated verification records stay local under `artifacts/spark-workflow-*.json`; source and documentation changes are committed on the feature branch.
+
 ## Previous deployment acceptance
 
 - 226 Python tests, 20 frontend behavior checks and 39 isolated system checks passed. Three pre-existing pytest fixture deprecation warnings remain.
